@@ -1,0 +1,238 @@
+# StudoBot Infrastructure
+# Docker Compose для развёртывания на Debian сервере
+
+version: '3.8'
+
+services:
+  # ==========================================================================
+  # DATABASE
+  # ==========================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: studobot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-studobot}
+      POSTGRES_USER: ${POSTGRES_USER:-studobot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-studobot_secure_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-studobot} -d ${POSTGRES_DB:-studobot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - studobot-network
+
+  # ==========================================================================
+  # FILE STORAGE (S3-compatible)
+  # ==========================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: studobot-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_secret}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"    # S3 API
+      - "${MINIO_CONSOLE_PORT:-9001}:9001" # Web UI
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - studobot-network
+
+  # Инициализация бакетов MinIO
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin_secret};
+      mc mb myminio/student-files --ignore-existing;
+      mc mb myminio/backups --ignore-existing;
+      mc anonymous set download myminio/student-files/public;
+      exit 0;
+      "
+    networks:
+      - studobot-network
+
+  # ==========================================================================
+  # WORKFLOW ORCHESTRATOR
+  # ==========================================================================
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: studobot-n8n
+    restart: unless-stopped
+    environment:
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - NODE_ENV=production
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5678/}
+      - GENERIC_TIMEZONE=${TIMEZONE:-Europe/Moscow}
+      - TZ=${TIMEZONE:-Europe/Moscow}
+      # База данных для n8n (используем ту же PostgreSQL)
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-studobot}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-studobot}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-studobot_secure_password}
+      # Переменные для workflows
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - MINIO_ENDPOINT=minio
+      - MINIO_PORT=9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin_secret}
+      - MINIO_BUCKET=student-files
+      - MINIO_USE_SSL=false
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_API_URL=${AI_API_URL:-https://api.openai.com/v1}
+      - AI_MODEL=${AI_MODEL:-gpt-4}
+      - TEACHER_TELEGRAM_ID=${TEACHER_TELEGRAM_ID}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ../n8n-workflows:/workflows:ro
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - studobot-network
+
+  # ==========================================================================
+  # API SERVER (FastAPI)
+  # ==========================================================================
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: studobot-api
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-studobot}:${POSTGRES_PASSWORD:-studobot_secure_password}@postgres:5432/${POSTGRES_DB:-studobot}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin_secret}
+      - MINIO_BUCKET=student-files
+      - MINIO_USE_SSL=false
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_API_URL=${AI_API_URL:-https://api.openai.com/v1}
+      - AI_MODEL=${AI_MODEL:-gpt-4}
+      - TEACHER_TELEGRAM_ID=${TEACHER_TELEGRAM_ID}
+      - JWT_SECRET=${JWT_SECRET:-change_this_to_random_string}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - studobot-network
+
+  # ==========================================================================
+  # TELEGRAM BOT POLLING (опционально, если не используем webhooks)
+  # ==========================================================================
+  # telegram-bot:
+  #   build:
+  #     context: ../telegram-bot
+  #     dockerfile: Dockerfile
+  #   container_name: studobot-telegram
+  #   restart: unless-stopped
+  #   environment:
+  #     - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+  #     - API_URL=http://api:8000
+  #   depends_on:
+  #     api:
+  #       condition: service_healthy
+  #   networks:
+  #     - studobot-network
+
+  # ==========================================================================
+  # WEB PANEL (опционально)
+  # ==========================================================================
+  # frontend:
+  #   build:
+  #     context: ../frontend
+  #     dockerfile: Dockerfile
+  #   container_name: studobot-frontend
+  #   restart: unless-stopped
+  #   environment:
+  #     - NEXT_PUBLIC_API_URL=${API_URL:-http://localhost:8000}
+  #   ports:
+  #     - "${FRONTEND_PORT:-3000}:3000"
+  #   depends_on:
+  #     api:
+  #       condition: service_healthy
+  #   networks:
+  #     - studobot-network
+
+  # ==========================================================================
+  # BACKUP SERVICE (бекап на Яндекс.Диск)
+  # ==========================================================================
+  backup:
+    image: rclone/rclone:latest
+    container_name: studobot-backup
+    restart: unless-stopped
+    environment:
+      - RCLONE_CONFIG_YANDEX_TYPE=webdav
+      - RCLONE_CONFIG_YANDEX_URL=https://webdav.yandex.ru
+      - RCLONE_CONFIG_YANDEX_VENDOR=other
+      - RCLONE_CONFIG_YANDEX_USER=${YANDEX_USER}
+      - RCLONE_CONFIG_YANDEX_PASS=${YANDEX_PASS}
+    volumes:
+      - minio_data:/data:ro
+      - backup_config:/config
+    entrypoint: >
+      /bin/sh -c "
+      while true; do
+        rclone sync /data/student-files yandex:/studobot-backup/$(date +%Y-%m-%d) -v
+        sleep 86400
+      done
+      "
+    networks:
+      - studobot-network
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
+  n8n_data:
+    driver: local
+  backup_config:
+    driver: local
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  studobot-network:
+    driver: bridge

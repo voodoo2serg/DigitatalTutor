@@ -1,0 +1,193 @@
+{
+  "name": "StudoBot - Напоминания о дедлайнах",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  s.id as submission_id,\n  s.title,\n  s.current_stage,\n  s.actual_deadline,\n  st.telegram_id,\n  st.display_name,\n  at.name as assignment_name\nFROM submissions s\nJOIN students st ON s.student_id = st.id\nJOIN assignment_types at ON s.assignment_type_id = at.id\nWHERE s.actual_deadline IN (CURRENT_DATE + 1, CURRENT_DATE + 3)\nAND s.status NOT IN ('approved', 'rejected')\nAND st.is_active = TRUE\nAND NOT EXISTS (\n  SELECT 1 FROM notifications n\n  WHERE n.submission_id = s.id\n  AND n.notification_type = 'deadline_reminder'\n  AND n.created_at > CURRENT_DATE\n)"
+      },
+      "id": "find-upcoming-deadlines",
+      "name": "Find Upcoming Deadlines",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-results",
+              "leftValue": "={{ $json }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "has-deadlines",
+      "name": "Has Deadlines?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegram_id }}",
+        "text": "⏰ Напоминание о дедлайне!\n\nРабота: {{ $json.title || $json.assignment_name }}\nЭтап: {{ $json.current_stage }}\nДедлайн: {{ $json.actual_deadline }}\n\nПожалуйста, сдайте работу вовремя.",
+        "additionalFields": {}
+      },
+      "id": "send-reminder",
+      "name": "Send Reminder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-credentials",
+          "name": "Telegram API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "notifications",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "student_id": "={{ $json.student_id }}",
+            "submission_id": "={{ $json.submission_id }}",
+            "notification_type": "deadline_reminder",
+            "body": "Deadline reminder sent",
+            "status": "sent"
+          }
+        }
+      },
+      "id": "log-notification",
+      "name": "Log Notification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1050, 200],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "{{ $env.TEACHER_TELEGRAM_ID }}",
+        "text": "📊 Проверка дедлайнов завершена\n\nОтправлено напоминаний: {{ $items('Send Reminder').length }}",
+        "additionalFields": {}
+      },
+      "id": "notify-teacher",
+      "name": "Notify Teacher",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-credentials",
+          "name": "Telegram API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": {
+      "main": [
+        [
+          {
+            "node": "Find Upcoming Deadlines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Upcoming Deadlines": {
+      "main": [
+        [
+          {
+            "node": "Has Deadlines?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Deadlines?": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Teacher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reminder": {
+      "main": [
+        [
+          {
+            "node": "Log Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
