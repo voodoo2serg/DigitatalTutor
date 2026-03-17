@@ -1,0 +1,414 @@
+# DigitalTutor Telegram Bot Commands Configuration
+# Структура команд и меню для Telegram-бота
+
+bot_info:
+  name: "DigitalTutor Bot"
+  username: "your_bot_username_bot"
+  description: "Система управления учебными проектами"
+  version: "1.1"
+
+# =============================================================================
+# КОМАНДЫ ДЛЯ СТУДЕНТОВ
+# =============================================================================
+
+student_commands:
+  start:
+    command: "/start"
+    description: "Первый вход и регистрация"
+    handler: "handlers.student.on_start"
+    
+    # Скрипт первого входа (подробно)
+    welcome_flow:
+      step_1_greeting:
+        type: "message"
+        text: |
+          Привет! 👋
+          
+          Я Водопетов С.В. Вероятно у нас с вами идет научная или проектная работа! 
+          
+          Для того, чтобы упростить наше взаимодействие я сделал этого бота, 
+          который сильно облегчит нашу коммуникацию и сделает так, чтобы ничего не потерялось!
+          
+          Прошу потратить немного времени на первую регистрацию в системе.
+        
+      step_2_request_name:
+        type: "message"
+        text: "📝 Введите ваше ФИО полностью:"
+        wait_for: "text"
+        save_to: "student.name"
+        
+      step_3_request_group:
+        type: "message"
+        text: "📚 Введите вашу группу:"
+        wait_for: "text"
+        save_to: "student.group_name"
+        
+      step_4_select_work_type:
+        type: "keyboard"
+        text: "🎓 Выберите тип работы:"
+        options:
+          - text: "Курсовая работа"
+            callback: "work_type:coursework"
+          - text: "ВКР (диплом)"
+            callback: "work_type:thesis"
+          - text: "Научная статья"
+            callback: "work_type:article"
+          - text: "Проектная работа"
+            callback: "work_type:project"
+          - text: "Аспирантура"
+            callback: "work_type:phd"
+        save_to: "submission.type"
+        
+      step_5_request_topic:
+        type: "message"
+        text: "📖 Напишите тему вашей работы (если уже есть):"
+        wait_for: "text"
+        save_to: "submission.topic"
+        optional: true
+        
+      step_6_confirm:
+        type: "message"
+        text: |
+          ✅ Регистрация завершена!
+          
+          📋 Проверьте данные:
+          • ФИО: {{student.name}}
+          • Группа: {{student.group_name}}
+          • Тип работы: {{submission.type}}
+          • Тема: {{submission.topic}}
+          
+          Для просмотра своих работ используйте /status
+          Для справки по командам: /help
+          
+          Хорошего дня! 🎓
+
+  help:
+    command: "/help"
+    description: "Справка по командам бота"
+    handler: "handlers.student.on_help"
+    response: |
+      📚 Справка по командам DigitalTutor
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      📋 ОСНОВНЫЕ КОМАНДЫ:
+      
+      /start - Регистрация в системе
+      /status - Мои работы и статусы
+      /deadlines - Мои дедлайны
+      /submit - Сдать работу
+      /history - История коммуникаций
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      📁 РАБОТА С ФАЙЛАМИ:
+      
+      Просто отправьте файл боту, и он будет привязан к вашей текущей работе.
+      Поддерживаемые форматы: .docx, .pdf, .pptx, .zip
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      ❓ ЕСТЬ ВОПРОСЫ?
+      
+      Напишите ваш вопрос, и я передам его преподавателю.
+      Или используйте /feedback для обратной связи.
+
+  status:
+    command: "/status"
+    description: "Статус моих работ"
+    handler: "handlers.student.on_status"
+    response_template: |
+      📋 Ваши работы:
+      
+      {{#each submissions}}
+      ━━━━━━━━━━━━━━━━━━━━━━━━━
+      📖 {{title}}
+      📁 Тип: {{type}}
+      📊 Статус: {{status}}
+      📅 Дедлайн: {{deadline}}
+      {{current_milestone}}
+      {{/each}}
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━
+      Всего работ: {{total_count}}
+
+  deadlines:
+    command: "/deadlines"
+    description: "Мои дедлайны"
+    handler: "handlers.student.on_deadlines"
+    response_template: |
+      📅 Ваши дедлайны:
+      
+      {{#each deadlines}}
+      {{#if urgent}}🔴{{else}}🟢{{/if}} {{title}}
+         📆 {{deadline}} ({{days_left}} дн.)
+         📝 {{milestone}}
+      {{/each}}
+
+  submit:
+    command: "/submit"
+    description: "Сдать работу"
+    handler: "handlers.student.on_submit"
+    flow:
+      step_1:
+        type: "keyboard"
+        text: "Выберите работу для сдачи:"
+        options_from: "student.active_submissions"
+        
+      step_2:
+        type: "message"
+        text: "Отправьте файл с работой:"
+        wait_for: "document"
+        
+      step_3:
+        type: "message"
+        text: "✅ Файл принят: {{filename}}\nРазмер: {{size}}\n\nСтатус: На проверке"
+
+  history:
+    command: "/history"
+    description: "История коммуникаций"
+    handler: "handlers.student.on_history"
+    response_template: |
+      📜 История взаимодействий:
+      
+      {{#each communications}}
+      [{{date}}] {{direction}}: {{message_preview}}
+      {{/each}}
+      
+      Показано последних 20 сообщений.
+
+  feedback:
+    command: "/feedback"
+    description: "Обратная связь"
+    handler: "handlers.student.on_feedback"
+    response: |
+      💬 Напишите ваш вопрос или сообщение преподавателю:
+      
+      Ваше сообщение будет передано напрямую.
+
+# =============================================================================
+# КОМАНДЫ ДЛЯ ПРЕПОДАВАТЕЛЯ
+# =============================================================================
+
+teacher_commands:
+  admin:
+    command: "/admin"
+    description: "Панель управления"
+    handler: "handlers.teacher.on_admin"
+    keyboard:
+      - text: "📊 Статистика"
+        callback: "admin:stats"
+      - text: "📢 Рассылка"
+        callback: "admin:broadcast"
+      - text: "⚙️ Настройки"
+        callback: "admin:settings"
+      - text: "📝 Тексты бота"
+        callback: "admin:texts"
+      - text: "🔗 Коды доступа"
+        callback: "admin:codes"
+      - text: "📋 Цепочки заданий"
+        callback: "admin:chains"
+
+  stats:
+    command: "/stats"
+    description: "Статистика загрузки"
+    handler: "handlers.teacher.on_stats"
+    response_template: |
+      📊 Статистика на {{date}}:
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━
+      📈 ЗАГРУЗКА:
+      • На проверке: {{pending_review}}
+      • Сдано сегодня: {{submitted_today}}
+      • Дедлайны на неделе: {{this_week_deadlines}}
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━
+      📁 ПО ТИПАМ РАБОТ:
+      {{#each by_type}}
+      • {{name}}: {{count}}
+      {{/each}}
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━
+      ⚠️ ПИКИ ЗАГРУЗКИ:
+      {{#each peaks}}
+      • {{date}}: {{count}} работ
+      {{/each}}
+
+  broadcast:
+    command: "/broadcast"
+    description: "Массовая рассылка"
+    handler: "handlers.teacher.on_broadcast"
+    flow:
+      step_1:
+        type: "keyboard"
+        text: "Кому отправить рассылку?"
+        options:
+          - text: "Всем студентам"
+            callback: "broadcast:all"
+          - text: "По типу работы"
+            callback: "broadcast:by_type"
+          - text: "По дедлайну"
+            callback: "broadcast:by_deadline"
+          - text: "Выбрать вручную"
+            callback: "broadcast:manual"
+            
+      step_2:
+        type: "message"
+        text: "Введите текст сообщения:"
+        wait_for: "text"
+        
+      step_3:
+        type: "confirm"
+        text: "Отправить {{count}} студентам?"
+        
+  settings:
+    command: "/settings"
+    description: "Настройки системы"
+    handler: "handlers.teacher.on_settings"
+
+# =============================================================================
+# INLINE-КНОПКИ И CALLBACKS
+# =============================================================================
+
+callbacks:
+  work_type:
+    coursework: "Курсовая работа"
+    thesis: "ВКР (диплом)"
+    article: "Научная статья"
+    project: "Проектная работа"
+    phd: "Аспирантура"
+    
+  status_change:
+    approve: "✅ Одобрить"
+    revision: "🔄 На доработку"
+    reject: "❌ Отклонить"
+    
+  quick_reply:
+    ok: "✅ Принято"
+    later: "⏰ Посмотрю позже"
+    question: "❓ Есть вопрос"
+
+# =============================================================================
+# МЕНЮ (Web App)
+# =============================================================================
+
+menu:
+  main:
+    - text: "📋 Мои работы"
+      action: "show_submissions"
+    - text: "📅 Дедлайны"
+      action: "show_deadlines"
+    - text: "📤 Сдать работу"
+      action: "start_submit"
+    - text: "❓ Помощь"
+      action: "show_help"
+
+# =============================================================================
+# СООБЩЕНИЯ И УВЕДОМЛЕНИЯ
+# =============================================================================
+
+messages:
+  deadline_reminder:
+    days_1: |
+      🔴 ЗАВТРА ДЕДЛАЙН!
+      
+      Работа: {{title}}
+      Этап: {{milestone}}
+      
+      Успейте сдать работу вовремя!
+      
+    days_3: |
+      ⚠️ Через 3 дня дедлайн!
+      
+      Работа: {{title}}
+      Этап: {{milestone}}
+      Дата: {{deadline}}
+      
+    days_7: |
+      📅 Напоминание
+      
+      Через неделю ({{deadline}}) дедлайн по работе "{{title}}"
+      Текущий этап: {{milestone}}
+
+  status_change:
+    approved: |
+      ✅ Работа одобрена!
+      
+      "{{title}}"
+      Оценка: {{grade}}
+      
+      {{feedback}}
+      
+    revision: |
+      🔄 Требуется доработка
+      
+      "{{title}}"
+      
+      Комментарий преподавателя:
+      {{feedback}}
+      
+    rejected: |
+      ❌ Работа отклонена
+      
+      "{{title}}"
+      
+      Причина:
+      {{feedback}}
+
+# =============================================================================
+# КОДЫ ДОСТУПА (для спец. сценариев)
+# =============================================================================
+
+access_codes:
+  description: |
+    Коды доступа позволяют создать специальные сценарии регистрации.
+    Например, для быстрой регистрации на конференции или сбора пожеланий.
+    
+  example_codes:
+    - code: "CONF2024"
+      name: "Конференция 2024"
+      custom_flow:
+        skip_fields: ["group_name", "topic"]
+        extra_fields:
+          - name: "organisation"
+            text: "Организация"
+          - name: "wish"
+            text: "Пожелание/тема доклада"
+            
+    - code: "REVIEW"
+      name: "Рецензирование"
+      custom_flow:
+        skip_fields: ["group_name"]
+        extra_fields:
+          - name: "author_name"
+            text: "Имя автора работы"
+          - name: "work_title"
+            text: "Название работы"
+
+# =============================================================================
+## НАСТРОЙКИ МАСТЕРА УПРАВЛЕНИЯ
+# =============================================================================
+
+admin_panel:
+  texts_editor:
+    description: "Редактирование всех текстов бота"
+    editable:
+      - welcome_message
+      - help_text
+      - deadline_reminders
+      - status_messages
+      
+  chains_editor:
+    description: "Создание цепочек заданий"
+    example:
+      name: "Курсовая: полный цикл"
+      steps:
+        - name: "Выбор темы"
+          auto_deadline_days: 14
+          required_artifact: "text"
+        - name: "План работы"
+          auto_deadline_days: 21
+          required_artifact: "document"
+        - name: "Черновик"
+          auto_deadline_days: 45
+          required_artifact: "document"
+        - name: "Финальная версия"
+          auto_deadline_days: 60
+          required_artifact: "document"
