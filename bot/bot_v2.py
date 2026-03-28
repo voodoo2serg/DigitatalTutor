@@ -887,7 +887,15 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if upload:
                 await query.edit_message_text("✅ Файл загружен!")
                 
-                # AI анализ запускается вручную через админ-меню
+                # Автоматический запуск AI анализа (фоновый)
+                file_id = upload.get('id')
+                if file_id:
+                    import asyncio
+                    asyncio.create_task(
+                        run_ai_and_notify_admin(work_id, file_id, work.get('title'), work.get('student_name'))
+                    )
+                
+                # Студенту показываем только подтверждение создания работы
                 await query.message.reply_text(
                     "✅ <b>Работа и файл успешно созданы!</b>\n\n"
                     f"📝 Название: {work.get('title')}\n"
@@ -929,6 +937,153 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         context.user_data.clear()
         return ConversationHandler.END
+
+
+
+
+async def run_ai_and_notify_admin(work_id: str, file_id: str, work_title: str, student_name: str):
+    """Запуск AI анализа в фоне и отправка отчета админу"""
+    import asyncio
+    
+    try:
+        # Отправляем работу в очередь AI
+        result = await submit_to_ai_queue(work_id, file_id, "")
+        
+        if result and result.get('success'):
+            queue_id = result.get('queue_id')
+            logger.info(f"AI analysis queued: {queue_id} for work {work_id}")
+            
+            # Отправляем уведомление админу о начале анализа
+            admin_id = ADMIN_IDS[0] if ADMIN_IDS else None
+            if admin_id:
+                from telegram import Bot
+                bot = Bot(token="8662524865:AAHlENmig4dBo5yIdONDq03_pPq9E-j_7y0")
+                await bot.send_message(
+                    chat_id=admin_id,
+                    text=f"🤖 <b>AI анализ запущен</b>\n\n"
+                         f"📝 Работа: {work_title}\n"
+                         f"👤 Студент: {student_name}\n"
+                         f"🆔 ID работы: <code>{work_id}</code>\n"
+                         f"🆔 ID очереди: <code>{queue_id}</code>\n\n"
+                         f"⏳ Результат придёт после завершения анализа.",
+                    parse_mode="HTML"
+                )
+                
+                # Запускаем фоновую задачу проверки статуса
+                asyncio.create_task(
+                    check_ai_status_and_send_report(work_id, file_id, work_title, student_name, admin_id)
+                )
+        else:
+            logger.error(f"Failed to queue AI analysis for work {work_id}")
+    except Exception as e:
+        logger.error(f"Error in run_ai_and_notify_admin: {e}")
+
+
+async def check_ai_status_and_send_report(work_id: str, file_id: str, work_title: str, student_name: str, admin_id: int):
+    """Проверяет статус AI анализа и отправляет отчет админу когда готово"""
+    from telegram import Bot
+    import asyncio
+    
+    bot = Bot(token="8662524865:AAHlENmig4dBo5yIdONDq03_pPq9E-j_7y0")
+    max_attempts = 60  # Максимум 60 попыток (10 минут с интервалом 10 сек)
+    attempt = 0
+    
+    while attempt < max_attempts:
+        try:
+            # Проверяем статус анализа
+            work = await api_request("GET", f"/works/{work_id}")
+            
+            if work and work.get('ai_analysis_json'):
+                # AI анализ готов
+                ai_result = work.get('ai_analysis_json', {})
+                
+                # Формируем отчет
+                report_lines = [
+                    "📊 <b>AI Анализ готов!</b>",
+                    "",
+                    f"📝 Работа: {work_title}",
+                    f"👤 Студент: {student_name}",
+                    f"🆔 ID: <code>{work_id}</code>",
+                    "",
+                    "<b>Результаты анализа:</b>",
+                ]
+                
+                # Добавляем оценки если есть
+                if work.get('ai_plagiarism_score') is not None:
+                    report_lines.append(f"🛡 Оригинальность: {work['ai_plagiarism_score']}%")
+                if work.get('ai_structure_score') is not None:
+                    report_lines.append(f"📐 Структура: {work['ai_structure_score']}/10")
+                if work.get('ai_formatting_score') is not None:
+                    report_lines.append(f"🎨 Оформление: {work['ai_formatting_score']}/10")
+                
+                # Добавляем текстовый анализ
+                if isinstance(ai_result, dict):
+                    if ai_result.get('summary'):
+                        report_lines.extend(["", "<b>Краткое резюме:</b>", ai_result['summary'][:500]])
+                    if ai_result.get('strengths'):
+                        report_lines.extend(["", "<b>Сильные стороны:</b>", ai_result['strengths'][:500]])
+                    if ai_result.get('weaknesses'):
+                        report_lines.extend(["", "<b>Слабые стороны:</b>", ai_result['weaknesses'][:500]])
+                    if ai_result.get('recommendations'):
+                        report_lines.extend(["", "<b>Рекомендации:</b>", ai_result['recommendations'][:500]])
+                
+                report_lines.extend([
+                    "",
+                    "<b>Действия:</b>",
+                    f"/admin → '🤖 AI Проверка' → <code>{work_id}</code>"
+                ])
+                
+                report_text = "\n".join(report_lines)
+                
+                # Отправляем админу
+                try:
+                    await bot.send_message(
+                        chat_id=admin_id,
+                        text=report_text,
+                        parse_mode="HTML"
+                    )
+                    logger.info(f"AI report sent to admin for work {work_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send AI report to admin: {e}")
+                
+                return  # Успешно отправили отчет
+            
+            # Проверяем ошибку анализа
+            if work and work.get('ai_analysis_status') == 'error':
+                await bot.send_message(
+                    chat_id=admin_id,
+                    text=f"⚠️ <b>AI анализ завершился с ошибкой</b>\n\n"
+                         f"📝 Работа: {work_title}\n"
+                         f"👤 Студент: {student_name}\n"
+                         f"🆔 ID: <code>{work_id}</code>",
+                    parse_mode="HTML"
+                )
+                return
+            
+            # Ждем перед следующей проверкой
+            await asyncio.sleep(10)
+            attempt += 1
+            
+        except Exception as e:
+            logger.error(f"Error checking AI status: {e}")
+            await asyncio.sleep(10)
+            attempt += 1
+    
+    # Таймаут - отправляем уведомление
+    try:
+        await bot.send_message(
+            chat_id=admin_id,
+            text=f"⏰ <b>AI анализ занимает больше времени</b>\n\n"
+                 f"📝 Работа: {work_title}\n"
+                 f"👤 Студент: {student_name}\n"
+                 f"🆔 ID: <code>{work_id}</code>\n\n"
+                 f"Проверьте статус позже через /admin",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Failed to send timeout notification: {e}")
+
+
 
 
 async def handle_work_details(update, context, query, data):
