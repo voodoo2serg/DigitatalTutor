@@ -931,6 +931,115 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
 
 
+async def handle_work_details(update, context, query, data):
+    """Show work details for student"""
+    work_id = data.replace("work_details:", "")
+    
+    work = await api_request("GET", f"/works/{work_id}")
+    if not work:
+        await query.edit_message_text("❌ Работа не найдена")
+        return
+    
+    files = await api_request("GET", f"/files/work/{work_id}")
+    
+    status = work.get('status', 'draft')
+    status_emoji = {"submitted": "📤", "draft": "📝", "graded": "⭐", "revision": "🔄"}.get(status, "❓")
+    status_name = {"submitted": "Сдана", "draft": "Черновик", "graded": "Оценена", "revision": "На доработке"}.get(status, status)
+    
+    lines = []
+    lines.append(f"📄 <b>{work.get('title', 'Без названия')}</b>")
+    lines.append("")
+    lines.append(f"📊 <b>Статус:</b> {status_emoji} {status_name}")
+    lines.append(f"📝 <b>Тип:</b> {work.get('work_type_name', 'N/A')}")
+    created = work.get('created_at', 'N/A')
+    lines.append(f"📅 <b>Создана:</b> {created[:10] if created else 'N/A'}")
+    
+    if work.get('deadline'):
+        lines.append(f"⏰ <b>Дедлайн:</b> {work['deadline'][:10]}")
+    
+    if work.get('description'):
+        desc = work['description']
+        lines.append("")
+        lines.append("📝 <b>Описание:</b>")
+        lines.append(desc[:200] + "..." if len(desc) > 200 else desc)
+    
+    if files:
+        lines.append("")
+        lines.append(f"📎 <b>Файлы ({len(files)}):</b>")
+        for f in files:
+            size_kb = f.get('size_bytes', 0) // 1024
+            lines.append(f"├ {f.get('original_name', 'N/A')} ({size_kb} KB)")
+    
+    if work.get('teacher_comment'):
+        lines.append("")
+        lines.append("✍️ <b>Рецензия:</b>")
+        lines.append(work['teacher_comment'])
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_my_works")]]
+    
+    await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+
+async def handle_admin_work(update, context, query, data):
+    """Admin work details with contact info"""
+    work_id = data.replace("admin_work:", "")
+    
+    work = await api_request("GET", f"/works/{work_id}")
+    if not work:
+        await query.edit_message_text("❌ Работа не найдена")
+        return
+    
+    files = await api_request("GET", f"/files/work/{work_id}")
+    
+    status = work.get('status', 'draft')
+    status_emoji = {"submitted": "📤", "draft": "📝", "graded": "⭐", "revision": "🔄"}.get(status, "❓")
+    
+    lines = []
+    lines.append(f"📄 <b>{work.get('title', 'Без названия')}</b>")
+    lines.append("")
+    lines.append(f"👤 <b>Студент:</b> {work.get('student_name', 'N/A')}")
+    
+    # Email с кликабельной ссылкой
+    email = work.get('student_email')
+    if email:
+        lines.append(f"📧 <b>Email:</b> <a href=\"mailto:{email}\">{email}</a>")
+    
+    # Telegram с кликабельной ссылкой
+    tg_username = work.get('student_telegram_username')
+    tg_id = work.get('student_telegram_id')
+    if tg_username:
+        lines.append(f"💬 <b>Telegram:</b> <a href=\"https://t.me/{tg_username}\">@{tg_username}</a>")
+    elif tg_id:
+        lines.append(f"💬 <b>Telegram:</b> <a href=\"tg://user?id={tg_id}\">Открыть чат</a>")
+    
+    lines.append("")
+    lines.append(f"📊 <b>Статус:</b> {status_emoji} {status}")
+    lines.append(f"📝 <b>Тип:</b> {work.get('work_type_name', 'N/A')}")
+    created = work.get('created_at', 'N/A')
+    lines.append(f"📅 <b>Создана:</b> {created[:10] if created else 'N/A'}")
+    
+    if work.get('deadline'):
+        lines.append(f"⏰ <b>Дедлайн:</b> {work['deadline'][:10]}")
+    
+    if files:
+        lines.append("")
+        lines.append(f"📎 <b>Файлы ({len(files)}):</b>")
+        for f in files:
+            size_kb = f.get('size_bytes', 0) // 1024
+            lines.append(f"├ {f.get('original_name', 'N/A')} ({size_kb} KB)")
+    
+    # Кнопки действий
+    keyboard = [
+        [InlineKeyboardButton("✍️ Рецензия", callback_data=f"add_review:{work_id}"),
+         InlineKeyboardButton("⭐ Оценка", callback_data=f"add_grade:{work_id}")],
+        [InlineKeyboardButton("🔄 На доработку", callback_data=f"request_revision:{work_id}"),
+         InlineKeyboardButton("📨 Отчёт студенту", callback_data=f"send_report:{work_id}")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_works")]
+    ]
+    
+    await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML", disable_web_page_preview=True)
+
+
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -938,11 +1047,9 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     
     if data.startswith("work_details:"):
-        # Show work details
-        pass
+        await handle_work_details(update, context, query, data)
     elif data.startswith("admin_work:"):
-        # Admin work details
-        pass
+        await handle_admin_work(update, context, query, data)
     elif data.startswith("run_ai:"):
         await run_ai_analysis(update, context)
     elif data.startswith("send_report:"):
