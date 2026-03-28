@@ -1212,8 +1212,13 @@ async def handle_admin_work(update, context, query, data):
         [InlineKeyboardButton("🔙 Назад", callback_data="back_to_works")]
     ]
     
-    # Объединяем кнопки файла и действий
-    keyboard = file_keyboard + action_keyboard
+    # Кнопка AI ответа студенту
+    ai_response_keyboard = [
+        [InlineKeyboardButton("✍️ Сгенерировать ответ студенту (AI)", callback_data=f"generate_ai_response:{work_id}")]
+    ]
+    
+    # Объединяем все кнопки
+    keyboard = file_keyboard + action_keyboard + ai_response_keyboard
     
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML", disable_web_page_preview=True)
 
@@ -1290,6 +1295,247 @@ async def handle_yandex_open(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await query.message.reply_text("❌ Ошибка при получении ссылки")
 
 
+
+
+# ============== AI RESPONSE FOR STUDENT (OPTION B) ==============
+
+async def handle_generate_ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE, query, data: str):
+    """Сгенерировать AI ответ для студента"""
+    work_id = data.replace("generate_ai_response:", "")
+    
+    await query.answer("🔄 Генерация ответа...")
+    await query.edit_message_text(
+        "🤖 <b>Генерирую персонализированный ответ для студента...</b>\n\n"
+        "Это может занять 10-20 секунд.",
+        parse_mode="HTML"
+    )
+    
+    try:
+        # Вызываем API для генерации
+        result = await api_request("POST", f"/ai-analysis/{work_id}/generate-student-response", {})
+        
+        if result and result.get('success'):
+            response_data = result.get('response', {})
+            
+            # Формируем текст для превью
+            preview_text = format_ai_response_preview(response_data)
+            
+            keyboard = [
+                [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_ai_response:{work_id}")],
+                [InlineKeyboardButton("✅ Отправить студенту", callback_data=f"send_ai_response:{work_id}")],
+                [InlineKeyboardButton("🔙 Назад к работе", callback_data=f"admin_work:{work_id}")]
+            ]
+            
+            await query.message.reply_text(
+                preview_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+        else:
+            await query.message.reply_text(
+                "❌ <b>Ошибка генерации</b>\n\n"
+                f"{result.get('error', 'Неизвестная ошибка')}",
+                parse_mode="HTML"
+            )
+            
+    except Exception as e:
+        logger.error(f"Error generating AI response: {e}")
+        await query.message.reply_text(
+            "❌ Ошибка при генерации ответа. Попробуйте позже.",
+            parse_mode="HTML"
+        )
+
+
+def format_ai_response_preview(response_data: dict) -> str:
+    """Форматировать AI ответ для превью"""
+    lines = [
+        "✍️ <b>Сгенерированный ответ для студента:</b>",
+        "",
+        "⸻",
+        ""
+    ]
+    
+    if response_data.get('greeting'):
+        lines.append(f"📝 <b>Приветствие:</b>\n{response_data['greeting']}\n")
+    
+    if response_data.get('strengths'):
+        lines.append(f"✅ <b>Сильные стороны:</b>\n{response_data['strengths']}\n")
+    
+    if response_data.get('weaknesses'):
+        lines.append(f"⚠️ <b>Слабые стороны:</b>\n{response_data['weaknesses']}\n")
+    
+    if response_data.get('recommendations'):
+        lines.append(f"💡 <b>Рекомендации:</b>\n{response_data['recommendations']}\n")
+    
+    if response_data.get('conclusion'):
+        lines.append(f"🎯 <b>Заключение:</b>\n{response_data['conclusion']}\n")
+    
+    lines.extend([
+        "⸻",
+        "",
+        "📋 <b>Полный текст для отправки:</b>",
+        response_data.get('full_text', 'Текст не сгенерирован'),
+        "",
+        "⸻",
+        "",
+        "<i>Вы можете отредактировать ответ перед отправкой или отправить как есть.</i>"
+    ])
+    
+    return "\n".join(lines)
+
+
+async def handle_preview_ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE, query, data: str):
+    """Показать превью сгенерированного ответа"""
+    work_id = data.replace("preview_ai_response:", "")
+    
+    await query.answer("Загрузка...")
+    
+    try:
+        # Получаем работу с сохраненным ответом
+        work = await api_request("GET", f"/works/{work_id}")
+        
+        if not work or not work.get('ai_student_response'):
+            await query.message.reply_text("❌ Ответ не найден. Сгенерируйте его сначала.")
+            return
+        
+        response_data = work['ai_student_response']
+        preview_text = format_ai_response_preview(response_data)
+        
+        keyboard = [
+            [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_ai_response:{work_id}")],
+            [InlineKeyboardButton("✅ Отправить студенту", callback_data=f"send_ai_response:{work_id}")],
+            [InlineKeyboardButton("🔙 Назад", callback_data=f"admin_work:{work_id}")]
+        ]
+        
+        await query.edit_message_text(
+            preview_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error previewing AI response: {e}")
+        await query.message.reply_text("❌ Ошибка загрузки ответа.")
+
+
+async def handle_edit_ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE, query, data: str):
+    """Редактировать AI ответ перед отправкой"""
+    work_id = data.replace("edit_ai_response:", "")
+    
+    await query.answer("Редактирование...")
+    
+    try:
+        # Получаем работу
+        work = await api_request("GET", f"/works/{work_id}")
+        
+        if not work or not work.get('ai_student_response'):
+            await query.message.reply_text("❌ Ответ не найден.")
+            return
+        
+        response_data = work['ai_student_response']
+        full_text = response_data.get('full_text', '')
+        
+        # Сохраняем в контекст для редактирования
+        context.user_data['editing_response_work_id'] = work_id
+        context.user_data['editing_response_text'] = full_text
+        
+        # Просим пользователя отправить отредактированный текст
+        await query.message.reply_text(
+            "✏️ <b>Редактирование ответа</b>\n\n"
+            "Отправьте отредактированный текст ответа.\n"
+            "Текущий текст:\n"
+            f"\`\`\`\n{full_text[:500]}{'...' if len(full_text) > 500 else ''}\n\`\`\`",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Отмена", callback_data=f"admin_work:{work_id}")]
+            ])
+        )
+        
+    except Exception as e:
+        logger.error(f"Error editing AI response: {e}")
+        await query.message.reply_text("❌ Ошибка.")
+
+
+async def handle_send_ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE, query, data: str):
+    """Отправить AI ответ студенту"""
+    work_id = data.replace("send_ai_response:", "")
+    
+    await query.answer("Отправка...")
+    await query.edit_message_text("🔄 <b>Отправляю ответ студенту...</b>", parse_mode="HTML")
+    
+    try:
+        # Проверяем, есть ли отредактированный текст в контексте
+        edited_text = context.user_data.get('editing_response_text')
+        
+        # Отправляем через API
+        payload = {}
+        if edited_text:
+            payload['response_text'] = edited_text
+            # Очищаем контекст
+            context.user_data.pop('editing_response_work_id', None)
+            context.user_data.pop('editing_response_text', None)
+        
+        result = await api_request("POST", f"/ai-analysis/{work_id}/send-student-response", payload)
+        
+        if result and result.get('success'):
+            student_tg_id = result.get('student_telegram_id')
+            response_text = result.get('response_text', '')
+            
+            # Отправляем студенту через бот
+            try:
+                from telegram import Bot
+                bot = Bot(token="8662524865:AAHlENmig4dBo5yIdONDq03_pPq9E-j_7y0")
+                
+                # Формируем сообщение для студента
+                student_message = [
+                    "📋 <b>Обратная связь по вашей работе</b>",
+                    "",
+                    f"📝 Работа: {result.get('work_title', 'Ваша работа')}",
+                    "",
+                    "⸻",
+                    "",
+                    response_text,
+                    "",
+                    "⸻",
+                    "",
+                    "<i>Если есть вопросы — напишите преподавателю через меню.</i>"
+                ]
+                
+                await bot.send_message(
+                    chat_id=student_tg_id,
+                    text="\n".join(student_message),
+                    parse_mode="HTML"
+                )
+                
+                await query.message.reply_text(
+                    "✅ <b>Ответ успешно отправлен студенту!</b>",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 К работе", callback_data=f"admin_work:{work_id}")]
+                    ])
+                )
+                
+            except Exception as e:
+                logger.error(f"Error sending to student: {e}")
+                await query.message.reply_text(
+                    "⚠️ Ответ сохранён, но не удалось отправить в Telegram студента.\n"
+                    "Студент увидит его в веб-интерфейсе.",
+                    parse_mode="HTML"
+                )
+        else:
+            await query.message.reply_text(
+                f"❌ Ошибка отправки: {result.get('error', 'Неизвестная ошибка')}",
+                parse_mode="HTML"
+            )
+            
+    except Exception as e:
+        logger.error(f"Error sending AI response: {e}")
+        await query.message.reply_text(
+            "❌ Ошибка при отправке ответа.",
+            parse_mode="HTML"
+        )
+
+
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1308,7 +1554,47 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_download_file(update, context, query, data)
     elif data.startswith("yandex_open:"):
         await handle_yandex_open(update, context, query, data)
+    elif data.startswith("generate_ai_response:"):
+        await handle_generate_ai_response(update, context, query, data)
+    elif data.startswith("preview_ai_response:"):
+        await handle_preview_ai_response(update, context, query, data)
+    elif data.startswith("edit_ai_response:"):
+        await handle_edit_ai_response(update, context, query, data)
+    elif data.startswith("send_ai_response:"):
+        await handle_send_ai_response(update, context, query, data)
 
+
+
+
+async def handle_edited_response_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработать отредактированный текст ответа от админа"""
+    # Проверяем, находится ли пользователь в режиме редактирования
+    work_id = context.user_data.get('editing_response_work_id')
+    
+    if not work_id:
+        # Не в режиме редактирования — игнорируем
+        return
+    
+    # Получаем отредактированный текст
+    edited_text = update.message.text
+    
+    # Сохраняем в контекст
+    context.user_data['editing_response_text'] = edited_text
+    
+    # Показываем превью с кнопками отправки
+    keyboard = [
+        [InlineKeyboardButton("✅ Отправить студенту", callback_data=f"send_ai_response:{work_id}")],
+        [InlineKeyboardButton("✏️ Редактировать ещё", callback_data=f"edit_ai_response:{work_id}")],
+        [InlineKeyboardButton("🔙 Отмена", callback_data=f"admin_work:{work_id}")]
+    ]
+    
+    await update.message.reply_text(
+        "✍️ <b>Отредактированный ответ:</b>\n\n"
+        f"{edited_text[:1000]}{'...' if len(edited_text) > 1000 else ''}\n\n"
+        "<i>Проверьте и отправьте студенту.</i>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
 
 # ============== MAIN ==============
 
