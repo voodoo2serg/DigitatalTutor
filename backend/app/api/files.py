@@ -13,7 +13,7 @@ router = APIRouter()
 @router.post("/upload/{work_id}")
 async def upload_file(
     work_id: str,
-    file: UploadFile = File(...),
+    file: UploadFile,
     db: AsyncSession = Depends(get_db)
 ):
     # Check work exists
@@ -39,7 +39,7 @@ async def upload_file(
         original_name=file.filename,
         mime_type=file.content_type,
         size_bytes=len(content),
-        storage_type='local',
+        storage_type='minio',
         storage_path=file_path
     )
     db.add(db_file)
