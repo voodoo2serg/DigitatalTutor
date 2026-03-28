@@ -1118,19 +1118,29 @@ async def handle_work_details(update, context, query, data):
         lines.append("📝 <b>Описание:</b>")
         lines.append(desc[:200] + "..." if len(desc) > 200 else desc)
     
+    file_id = None
     if files:
         lines.append("")
         lines.append(f"📎 <b>Файлы ({len(files)}):</b>")
         for f in files:
             size_kb = f.get('size_bytes', 0) // 1024
             lines.append(f"├ {f.get('original_name', 'N/A')} ({size_kb} KB)")
+        file_id = files[0].get('id')
+    
+    # Кнопки для работы с файлом
+    keyboard = []
+    if file_id:
+        keyboard.append([
+            InlineKeyboardButton("📥 Скачать файл", callback_data=f"download_file:{file_id}"),
+            InlineKeyboardButton("🌐 Яндекс.Диск", callback_data=f"yandex_open:{file_id}")
+        ])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_my_works")])
     
     if work.get('teacher_comment'):
         lines.append("")
         lines.append("✍️ <b>Рецензия:</b>")
         lines.append(work['teacher_comment'])
-    
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_my_works")]]
     
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
@@ -1176,15 +1186,25 @@ async def handle_admin_work(update, context, query, data):
     if work.get('deadline'):
         lines.append(f"⏰ <b>Дедлайн:</b> {work['deadline'][:10]}")
     
+    file_id = None
     if files:
         lines.append("")
         lines.append(f"📎 <b>Файлы ({len(files)}):</b>")
         for f in files:
             size_kb = f.get('size_bytes', 0) // 1024
             lines.append(f"├ {f.get('original_name', 'N/A')} ({size_kb} KB)")
+        file_id = files[0].get('id')
+    
+    # Кнопки для работы с файлом
+    file_keyboard = []
+    if file_id:
+        file_keyboard.append([
+            InlineKeyboardButton("📥 Скачать файл", callback_data=f"download_file:{file_id}"),
+            InlineKeyboardButton("🌐 Яндекс.Диск", callback_data=f"yandex_open:{file_id}")
+        ])
     
     # Кнопки действий
-    keyboard = [
+    action_keyboard = [
         [InlineKeyboardButton("✍️ Рецензия", callback_data=f"add_review:{work_id}"),
          InlineKeyboardButton("⭐ Оценка", callback_data=f"add_grade:{work_id}")],
         [InlineKeyboardButton("🔄 На доработку", callback_data=f"request_revision:{work_id}"),
@@ -1192,7 +1212,82 @@ async def handle_admin_work(update, context, query, data):
         [InlineKeyboardButton("🔙 Назад", callback_data="back_to_works")]
     ]
     
+    # Объединяем кнопки файла и действий
+    keyboard = file_keyboard + action_keyboard
+    
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML", disable_web_page_preview=True)
+
+
+
+
+async def handle_download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, query, data: str):
+    """Отправить файл напрямую в чат"""
+    file_id = data.replace("download_file:", "")
+    
+    await query.answer("🔄 Загрузка файла...")
+    
+    try:
+        # Получаем информацию о файле
+        file_info = await api_request("GET", f"/files/{file_id}")
+        if not file_info:
+            await query.message.reply_text("❌ Файл не найден")
+            return
+        
+        # Получаем файл через API
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{API_BASE_URL}/files/{file_id}/download",
+                headers=API_HEADERS,
+                timeout=60.0,
+                follow_redirects=True
+            )
+            
+            if response.status_code == 200:
+                # Отправляем файл
+                filename = file_info.get('original_name', 'file')
+                await context.bot.send_document(
+                    chat_id=query.message.chat_id,
+                    document=response.content,
+                    filename=filename,
+                    caption=f"📎 {filename}"
+                )
+            else:
+                await query.message.reply_text(f"❌ Ошибка загрузки файла: {response.status_code}")
+                
+    except Exception as e:
+        logger.error(f"Error downloading file: {e}")
+        await query.message.reply_text("❌ Ошибка при загрузке файла")
+
+
+async def handle_yandex_open(update: Update, context: ContextTypes.DEFAULT_TYPE, query, data: str):
+    """Открыть файл на Яндекс.Диске"""
+    file_id = data.replace("yandex_open:", "")
+    
+    await query.answer("🔄 Получение ссылки...")
+    
+    try:
+        # Получаем публичную ссылку
+        result = await api_request("GET", f"/files/{file_id}/public-url")
+        
+        if result and result.get('success'):
+            public_url = result.get('public_url')
+            filename = result.get('filename', 'файл')
+            
+            text = f"🌐 <b>{filename}</b>\n\n"
+            text += f"📎 <a href="'{public_url}'">Открыть в Яндекс.Диске</a>\n\n"
+            text += f"💡 Ссылка: <code>{public_url}</code>"
+            
+            await query.message.reply_text(
+                text,
+                parse_mode="HTML",
+                disable_web_page_preview=False
+            )
+        else:
+            await query.message.reply_text("❌ Не удалось получить ссылку на Яндекс.Диск")
+            
+    except Exception as e:
+        logger.error(f"Error getting Yandex link: {e}")
+        await query.message.reply_text("❌ Ошибка при получении ссылки")
 
 
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1209,6 +1304,10 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await run_ai_analysis(update, context)
     elif data.startswith("send_report:"):
         await send_ai_report(update, context)
+    elif data.startswith("download_file:"):
+        await handle_download_file(update, context, query, data)
+    elif data.startswith("yandex_open:"):
+        await handle_yandex_open(update, context, query, data)
 
 
 # ============== MAIN ==============
