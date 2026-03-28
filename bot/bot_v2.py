@@ -3,6 +3,7 @@ DigitalTutor Bot v3.1 — Admin AI Controls & Templates
 Добавлено: AI проверка, шаблоны, массовые рассылки
 """
 import logging
+import io
 import httpx
 from telegram import (
     Update, KeyboardButton, ReplyKeyboardMarkup, 
@@ -230,6 +231,83 @@ async def admin_ai_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disable_web_page_preview=True
     )
 
+
+async def admin_ai_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Manual AI analysis of student work"""
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    await update.message.reply_text(
+        "🤖 <b>AI Анализ работы</b>\n\n"
+        "Введите ID работы для анализа:",
+        parse_mode="HTML",
+        reply_markup=CANCEL_MENU
+    )
+    context.user_data['awaiting_work_id_for_ai'] = True
+
+
+
+
+
+
+async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin input for AI analysis"""
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        return
+    
+    if context.user_data.get('awaiting_work_id_for_ai'):
+        work_id = update.message.text.strip()
+        context.user_data.pop('awaiting_work_id_for_ai', None)
+        
+        # Validate UUID
+        try:
+            from uuid import UUID
+            UUID(work_id)
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Неверный формат ID. Введите корректный UUID.",
+                reply_markup=ADMIN_MENU
+            )
+            return
+        
+        await update.message.reply_text(f"🔄 Запускаю AI анализ для работы {work_id}...")
+        
+        # Get files for work
+        files = await api_request("GET", f"/files/work/{work_id}")
+        
+        if not files:
+            await update.message.reply_text(
+                "❌ Работа не найдена или у неё нет файлов.",
+                reply_markup=ADMIN_MENU
+            )
+            return
+        
+        # Start AI analysis
+        file_id = files[0].get('id')
+        result = await submit_to_ai_queue(work_id, file_id, "")
+        
+        if result and result.get('success'):
+            await update.message.reply_text(
+                f"✅ <b>AI анализ запущен!</b>\n\n"
+                f"🆔 ID работы: <code>{work_id}</code>\n"
+                f"🆔 ID очереди: <code>{result.get('queue_id')}</code>\n\n"
+                "📊 Результат будет отправлен в личные сообщения после завершения.",
+                parse_mode="HTML",
+                reply_markup=ADMIN_MENU
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ <b>Ошибка запуска AI анализа</b>\n\n"
+                f"🆔 ID работы: <code>{work_id}</code>\n"
+                f"⚠️ {result.get('error', 'Неизвестная ошибка')}",
+                parse_mode="HTML",
+                reply_markup=ADMIN_MENU
+            )
 
 async def admin_templates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: message templates"""
@@ -803,30 +881,20 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
             file_obj = await context.bot.get_file(file_info["file_id"])
             file_bytes = await file_obj.download_as_bytearray()
             
-            files = {"file": (file_info["filename"], file_bytes, file_info["mime_type"])}
+            files = {"file": (file_info["filename"], io.BytesIO(file_bytes), file_info["mime_type"])}
             upload = await api_request("POST", f"/files/upload/{work_id}", files=files)
             
             if upload:
                 await query.edit_message_text("✅ Файл загружен!")
                 
-                # Add to AI analysis queue (processed by Kimi-Claw heartbeat)
-                queue_result = await submit_to_ai_queue(work_id, upload.get('id', ''), "")
-                
-                if queue_result and queue_result.get('success'):
-                    await query.message.reply_text(
-                        "🤖 <b>AI анализ добавлен в очередь!</b>\n"
-                        "Обработка через Kimi-Claw (2-5 минут).\n"
-                        f"ID очереди: <code>{queue_result.get('queue_id')}</code>",
-                        parse_mode="HTML",
-                        reply_markup=MAIN_MENU
-                    )
-                else:
-                    await query.message.reply_text(
-                        "⚠️ <b>Работа создана, но AI анализ не запущен</b>\n"
-                        "Обратитесь к администратору.",
-                        parse_mode="HTML",
-                        reply_markup=MAIN_MENU
-                    )
+                # AI анализ запускается вручную через админ-меню
+                await query.message.reply_text(
+                    "✅ <b>Работа и файл успешно созданы!</b>\n\n"
+                    f"📝 Название: {work.get('title')}\n"
+                    f"🆔 ID: <code>{work.get('id')}</code>",
+                    parse_mode="HTML",
+                    reply_markup=MAIN_MENU
+                )
                 
                 # FIX: Очищаем данные и завершаем диалог
                 context.user_data.clear()
@@ -841,9 +909,9 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 return ConversationHandler.END
                 
         except Exception as e:
-            logger.error(f"Submit to queue error: {e}")
+            logger.error(f"File upload error: {e}")
             await query.message.reply_text(
-                '⚠️ Работа создана, но AI анализ не запущен',
+                '⚠️ Работа создана, но файл не загружен',
                 reply_markup=MAIN_MENU
             )
             context.user_data.clear()
@@ -930,6 +998,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex("📋 Все работы"), admin_list_all_works))
     application.add_handler(MessageHandler(filters.Regex("📊 Статистика"), show_statistics))
     application.add_handler(MessageHandler(filters.Regex("📊 Статистика системы"), show_statistics))
+    application.add_handler(MessageHandler(filters.Regex("🤖 AI Проверка"), admin_ai_analyze))
     application.add_handler(MessageHandler(filters.Regex("⚙️ Настройки AI"), admin_ai_settings))
     application.add_handler(MessageHandler(filters.Regex("📨 Шаблоны"), admin_templates))
     application.add_handler(MessageHandler(filters.Regex("📤 Массовая рассылка"), admin_bulk_message))
