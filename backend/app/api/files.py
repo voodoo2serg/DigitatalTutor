@@ -17,6 +17,49 @@ async def upload_file(
     file: UploadFile,
     db: AsyncSession = Depends(get_db)
 ):
+    """Upload file with duplicate check (filename + size + student)"""
+    
+    # Get work to find student
+    from app.models.models import StudentWork, User
+    result = await db.execute(select(StudentWork).where(StudentWork.id == UUID(work_id)))
+    work = result.scalar_one_or_none()
+    
+    if not work:
+        raise HTTPException(status_code=404, detail="Work not found")
+    
+    # Check for duplicates: filename + size + student
+    file_content = await file.read()
+    file_size = len(file_content)
+    file.filename = file.filename or "unnamed"
+    
+    # Reset file position for later use
+    await file.seek(0)
+    
+    # Check duplicates
+    duplicate_result = await db.execute(
+        select(File, StudentWork)
+        .join(StudentWork, File.work_id == StudentWork.id)
+        .where(StudentWork.student_id == work.student_id)
+        .where(File.original_name == file.filename)
+        .where(File.size_bytes == file_size)
+        .order_by(File.created_at.desc())
+        .limit(1)
+    )
+    duplicate = duplicate_result.first()
+    
+    if duplicate:
+        file_obj, dup_work = duplicate
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "DUPLICATE_FILE",
+                "message": "Файл с таким именем и размером уже загружен",
+                "existing_file_id": str(file_obj.id),
+                "existing_work_id": str(dup_work.id),
+                "existing_work_title": dup_work.title,
+                "uploaded_at": file_obj.created_at.isoformat() if file_obj.created_at else None
+            }
+        )
     # Check work exists
     result = await db.execute(select(StudentWork).where(StudentWork.id == work_id))
     work = result.scalar_one_or_none()

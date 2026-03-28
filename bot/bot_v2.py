@@ -884,6 +884,21 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
             files = {"file": (file_info["filename"], io.BytesIO(file_bytes), file_info["mime_type"])}
             upload = await api_request("POST", f"/files/upload/{work_id}", files=files)
             
+            # Check for duplicate error
+            if upload and isinstance(upload, dict) and upload.get('error') == 'DUPLICATE_FILE':
+                dup_work = upload.get('existing_work_title', 'Unknown')
+                await query.edit_message_text(
+                    "⚠️ <b>Файл уже загружен!</b>\n\n"
+                    f"📎 Файл: {file_info['filename']}\n"
+                    f"💾 Размер: {file_info['size'] // 1024} KB\n\n"
+                    f"Вы уже загружали такой файл для работы \"{dup_work}\".\n\n"
+                    "Если нужно обновить — удалите старую работу \"Мои работы\" или свяжитесь с преподавателем.",
+                    parse_mode="HTML",
+                    reply_markup=MAIN_MENU
+                )
+                context.user_data.clear()
+                return ConversationHandler.END
+            
             if upload:
                 await query.edit_message_text("✅ Файл загружен!")
                 
