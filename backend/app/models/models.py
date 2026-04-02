@@ -21,6 +21,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
+    yandex_folder = Column(String(255))  # Папка на Яндекс.Диске
     
     works = relationship("StudentWork", back_populates="student")
 
