@@ -12,7 +12,7 @@ from sqlalchemy import select
 from uuid import uuid4
 
 from bot.config import config
-from bot.keyboards import get_main_menu, get_admin_menu, get_work_type_menu, get_cancel_menu, get_yes_no_menu
+from bot.keyboards import get_main_menu, get_admin_menu, get_work_type_menu, get_cancel_menu, get_yes_no_menu, get_deadline_menu
 from bot.templates.messages import Messages
 from bot.services.db import AsyncSessionContext
 from bot.services.local_file_service import local_file_service
@@ -127,10 +127,66 @@ async def process_description(message: Message, state: FSMContext):
     
     await message.answer(
         Messages.SUBMIT_DEADLINE,
+        reply_markup=get_deadline_menu(),
+        parse_mode="HTML"
+    )
+
+
+
+@router.message(SubmitStates.waiting_deadline, F.text == "⚡ Супер срочно")
+async def deadline_urgent(message: Message, state: FSMContext):
+    """Супер срочно - завтра"""
+    deadline = datetime.utcnow() + timedelta(days=1)
+    deadline = deadline.replace(hour=23, minute=59)
+    await state.update_data(deadline=deadline)
+    await state.set_state(SubmitStates.waiting_file)
+    await message.answer(
+        "📎 <b>Загрузка файла</b>\n\n"
+        "Отправьте файл работы (docx, pdf, txt)\n"
+        "Или нажмите /skip чтобы пропустить",
         reply_markup=get_cancel_menu(),
         parse_mode="HTML"
     )
 
+@router.message(SubmitStates.waiting_deadline, F.text == "🎓 Май")
+async def deadline_may(message: Message, state: FSMContext):
+    """Дедлайн - конец мая"""
+    current_year = datetime.utcnow().year
+    deadline = datetime(current_year, 5, 31, 23, 59)
+    await state.update_data(deadline=deadline)
+    await state.set_state(SubmitStates.waiting_file)
+    await message.answer(
+        "📎 <b>Загрузка файла</b>\n\n"
+        "Отправьте файл работы (docx, pdf, txt)\n"
+        "Или нажмите /skip чтобы пропустить",
+        reply_markup=get_cancel_menu(),
+        parse_mode="HTML"
+    )
+
+@router.message(SubmitStates.waiting_deadline, F.text == "🗓️ Через неделю")
+async def deadline_week(message: Message, state: FSMContext):
+    """Через неделю"""
+    deadline = datetime.utcnow() + timedelta(days=7)
+    deadline = deadline.replace(hour=23, minute=59)
+    await state.update_data(deadline=deadline)
+    await state.set_state(SubmitStates.waiting_file)
+    await message.answer(
+        "📎 <b>Загрузка файла</b>\n\n"
+        "Отправьте файл работы (docx, pdf, txt)\n"
+        "Или нажмите /skip чтобы пропустить",
+        reply_markup=get_cancel_menu(),
+        parse_mode="HTML"
+    )
+
+@router.message(SubmitStates.waiting_deadline, F.text == "📅 Указать дату")
+async def deadline_manual(message: Message, state: FSMContext):
+    """Пользователь хочет ввести дату вручную"""
+    await message.answer(
+        "🗓️ <b>Введите дедлайн</b>\n\n"
+        "Формат: ДД.ММ.ГГГГ (например, 15.06.2026)",
+        reply_markup=get_cancel_menu(),
+        parse_mode="HTML"
+    )
 
 @router.message(SubmitStates.waiting_deadline)
 async def process_deadline(message: Message, state: FSMContext):
@@ -257,7 +313,7 @@ async def show_summary(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=get_yes_no_menu(), parse_mode="HTML")
 
 
-@router.message(SubmitStates.waiting_confirm, F.text == "✅ Подтвердить")
+@router.message(SubmitStates.waiting_confirm, F.text == "✅ Да")
 async def confirm_submit(message: Message, state: FSMContext):
     """Сохранение работы в БД"""
     data = await state.get_data()
@@ -298,7 +354,7 @@ async def confirm_submit(message: Message, state: FSMContext):
     await state.clear()
 
 
-@router.message(SubmitStates.waiting_confirm, F.text == "❌ Отменить")
+@router.message(SubmitStates.waiting_confirm, F.text == "❌ Нет")
 async def cancel_submit(message: Message, state: FSMContext):
     """Отмена сдачи работы"""
     data = await state.get_data()
