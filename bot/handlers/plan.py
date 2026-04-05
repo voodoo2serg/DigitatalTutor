@@ -88,15 +88,14 @@ async def show_my_plan(message: Message):
             )
             return
         
-        # Определяем роль
-        role_code = None
-        for code, info in STUDENT_ROLES.items():
-            if info['name'] == user.role:
-                role_code = code
-                break
-        
-        if not role_code:
-            role_code = "other"
+        # Определяем роль (сопоставление ролей БД с планами)
+        role_mapping = {
+            "student": "vkr",  # По умолчанию студент = ВКР
+            "aspirant": "aspirant",
+            "teacher": "work_guide",
+            "admin": "work_guide"
+        }
+        role_code = role_mapping.get(user.role, "other")
         
         role_info = STUDENT_ROLES.get(role_code, STUDENT_ROLES['other'])
         
