@@ -348,7 +348,7 @@ async def confirm_submit(message: Message, state: FSMContext):
                     original_name=original_name or file_path.split('/')[-1],
                     mime_type=mime_type or 'application/octet-stream',
                     size_bytes=file_size or 0,
-                    storage_type='local',
+                    storage_type='minio',
                     storage_path=file_path,
                     yandex_file_path=file_path  # Для совместимости
                 )
