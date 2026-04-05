@@ -16,7 +16,7 @@ from bot.keyboards import get_main_menu, get_admin_menu, get_work_type_menu, get
 from bot.templates.messages import Messages
 from bot.services.db import AsyncSessionContext
 from bot.services.local_file_service import local_file_service
-from bot.models import User, StudentWork, WorkType
+from bot.models import User, StudentWork, WorkType, File
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -328,11 +328,32 @@ async def confirm_submit(message: Message, state: FSMContext):
                 description=data.get('description'),
                 deadline=data.get('deadline'),
                 status='submitted',
-                yandex_file_path=data.get('file_path'),  # Теперь это локальный путь
                 submitted_at=datetime.utcnow()
             )
             
             session.add(work)
+            await session.flush()  # Получаем work.id без commit
+            
+            # Создаём запись о файле если есть
+            file_path = data.get('file_path')
+            original_name = data.get('original_filename')
+            mime_type = data.get('mime_type')
+            file_size = data.get('file_size')
+            
+            if file_path:
+                file_record = File(
+                    id=uuid4(),
+                    work_id=work.id,
+                    filename=file_path.split('/')[-1],  # Имя файла из пути
+                    original_name=original_name or file_path.split('/')[-1],
+                    mime_type=mime_type or 'application/octet-stream',
+                    size_bytes=file_size or 0,
+                    storage_type='local',
+                    storage_path=file_path,
+                    yandex_file_path=file_path  # Для совместимости
+                )
+                session.add(file_record)
+            
             await session.commit()
             
             logger.info(f"Work saved: {work.id} for student {data.get('student_id')}")
