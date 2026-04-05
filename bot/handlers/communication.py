@@ -80,8 +80,7 @@ async def process_message(message: Message, state: FSMContext):
         async with AsyncSessionContext() as session:
             comm = Communication(
                 id=uuid4(),
-                student_id=student_id,
-                from_user_id=None,
+                from_user_id=student_id,
                 to_user_id=None,
                 channel="telegram",
                 message_type="text",
