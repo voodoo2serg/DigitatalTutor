@@ -1,42 +1,43 @@
 """
-DigitalTutor Bot - Submit Handler
-Сдача работы (Conversation Handler)
+DigitalTutor Bot - Submit Handler with Local Storage
+Файлы сохраняются локально, Яндекс.Диск - опционально
 """
 import logging
 from datetime import datetime, timedelta
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery, ContentType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select
 from uuid import uuid4
 
-from bot.keyboards import (
-    get_main_menu, get_cancel_menu, get_work_type_menu,
-    get_deadline_menu, get_yes_no_menu
-)
+from bot.config import config
+from bot.keyboards import get_main_menu, get_admin_menu, get_work_type_menu, get_cancel_menu, get_yes_no_menu
 from bot.templates.messages import Messages
-from bot.services.yandex_service import YandexDiskService
+from bot.services.db import AsyncSessionContext
+from bot.services.local_file_service import local_file_service
+from bot.models import User, StudentWork, WorkType
 
 logger = logging.getLogger(__name__)
 router = Router()
 
-# FSM States для сдачи работы
 class SubmitStates(StatesGroup):
     waiting_type = State()
     waiting_title = State()
-    waiting_deadline_choice = State()
-    waiting_deadline_date = State()
+    waiting_description = State()
+    waiting_deadline = State()
     waiting_file = State()
-    confirm = State()
+    waiting_confirm = State()
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in config.ADMIN_IDS
 
 
 @router.message(F.text == "➕ Сдать работу")
 async def start_submit(message: Message, state: FSMContext):
-    """Начать процесс сдачи работы"""
+    """Начало процесса сдачи работы"""
     telegram_id = message.from_user.id
-    
-    from bot.models import AsyncSessionContext, User
     
     async with AsyncSessionContext() as session:
         result = await session.execute(
@@ -48,7 +49,7 @@ async def start_submit(message: Message, state: FSMContext):
             await message.answer(Messages.ERROR_REGISTRATION_INCOMPLETE)
             return
         
-        await state.update_data(student_id=str(user.id), yandex_folder=user.yandex_folder)
+        await state.update_data(student_id=str(user.id))
     
     await state.set_state(SubmitStates.waiting_type)
     await message.answer(
@@ -99,95 +100,69 @@ async def process_title(message: Message, state: FSMContext):
     """Обработка темы работы"""
     title = message.text.strip()
     
-    if len(title) < 5:
+    if len(title) < 3:
         await message.answer(
-            "❌ Название слишком короткое (минимум 5 символов)",
+            "❌ Тема слишком короткая. Введите полное название работы.",
             reply_markup=get_cancel_menu()
         )
         return
     
     await state.update_data(title=title)
-    await state.set_state(SubmitStates.waiting_deadline_choice)
+    await state.set_state(SubmitStates.waiting_description)
     
     await message.answer(
-        Messages.SUBMIT_DEADLINE.format(title=title),
-        reply_markup=get_deadline_menu(),
+        Messages.SUBMIT_DESCRIPTION,
+        reply_markup=get_cancel_menu(),
         parse_mode="HTML"
     )
 
 
-@router.message(SubmitStates.waiting_deadline_choice)
-async def process_deadline_choice(message: Message, state: FSMContext):
-    """Обработка выбора дедлайна"""
-    choice = message.text
+@router.message(SubmitStates.waiting_description)
+async def process_description(message: Message, state: FSMContext):
+    """Обработка описания работы"""
+    description = message.text.strip()
     
-    if choice == "⚡ Супер срочно":
-        deadline = datetime.utcnow() + timedelta(days=1)
-        await state.update_data(deadline=deadline, deadline_str="Супер срочно (завтра)")
-        await ask_for_file(message, state)
-        
-    elif choice == "🎓 Май":
-        now = datetime.utcnow()
-        deadline = datetime(now.year, 5, 31, 23, 59, 59)
-        if now.month > 5:
-            deadline = datetime(now.year + 1, 5, 31, 23, 59, 59)
-        await state.update_data(deadline=deadline, deadline_str=f"Май {deadline.year}")
-        await ask_for_file(message, state)
-        
-    elif choice == "🗓️ Через неделю":
-        deadline = datetime.utcnow() + timedelta(days=7)
-        await state.update_data(deadline=deadline, deadline_str="Через неделю")
-        await ask_for_file(message, state)
-        
-    elif choice == "📅 Указать дату":
-        await state.set_state(SubmitStates.waiting_deadline_date)
-        await message.answer(
-            Messages.SUBMIT_DATE_MANUAL,
-            reply_markup=get_cancel_menu(),
-            parse_mode="HTML"
-        )
-    else:
-        await message.answer(
-            "❌ Пожалуйста, выберите вариант из списка",
-            reply_markup=get_deadline_menu()
-        )
-
-
-@router.message(SubmitStates.waiting_deadline_date)
-async def process_manual_date(message: Message, state: FSMContext):
-    """Обработка ввода даты вручную"""
-    date_text = message.text.strip()
-    
-    try:
-        day, month, year = map(int, date_text.split("."))
-        deadline = datetime(year, month, day, 23, 59, 59)
-        
-        if deadline < datetime.utcnow():
-            await message.answer(
-                "❌ Дата не может быть в прошлом. Попробуйте ещё раз.",
-                reply_markup=get_cancel_menu()
-            )
-            return
-        
-        await state.update_data(deadline=deadline, deadline_str=date_text)
-        await ask_for_file(message, state)
-        
-    except (ValueError, IndexError):
-        await message.answer(
-            "❌ Неверный формат. Используйте формат ДД.ММ.ГГГГ",
-            reply_markup=get_cancel_menu()
-        )
-
-
-async def ask_for_file(message: Message, state: FSMContext):
-    """Запросить файл"""
-    await state.set_state(SubmitStates.waiting_file)
-    
-    data = await state.get_data()
-    deadline_str = data.get("deadline_str", "Не указан")
+    await state.update_data(description=description)
+    await state.set_state(SubmitStates.waiting_deadline)
     
     await message.answer(
-        Messages.SUBMIT_FILE.format(deadline=deadline_str),
+        Messages.SUBMIT_DEADLINE,
+        reply_markup=get_cancel_menu(),
+        parse_mode="HTML"
+    )
+
+
+@router.message(SubmitStates.waiting_deadline)
+async def process_deadline(message: Message, state: FSMContext):
+    """Обработка дедлайна"""
+    deadline_text = message.text.strip()
+    
+    # Парсим дату (формат: ДД.ММ.ГГГГ или ГГГГ-ММ-ДД)
+    try:
+        if '.' in deadline_text:
+            deadline = datetime.strptime(deadline_text, "%d.%m.%Y")
+        elif '-' in deadline_text:
+            deadline = datetime.strptime(deadline_text, "%Y-%m-%d")
+        else:
+            raise ValueError
+        
+        # Устанавливаем время на конец дня
+        deadline = deadline.replace(hour=23, minute=59)
+        
+    except ValueError:
+        await message.answer(
+            "❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ (например, 15.06.2026)",
+            reply_markup=get_cancel_menu()
+        )
+        return
+    
+    await state.update_data(deadline=deadline)
+    await state.set_state(SubmitStates.waiting_file)
+    
+    await message.answer(
+        "📎 <b>Загрузка файла</b>\n\n"
+        "Отправьте файл работы (docx, pdf, txt)\n"
+        "Или нажмите /skip чтобы пропустить",
         reply_markup=get_cancel_menu(),
         parse_mode="HTML"
     )
@@ -195,169 +170,146 @@ async def ask_for_file(message: Message, state: FSMContext):
 
 @router.message(SubmitStates.waiting_file, F.document)
 async def process_file(message: Message, state: FSMContext):
-    """Обработка загруженного файла"""
+    """Обработка загрузки файла - ЛОКАЛЬНОЕ ХРАНЕНИЕ"""
     document = message.document
     
-    if document.file_size > 20 * 1024 * 1024:
-        await message.answer(Messages.ERROR_FILE_TOO_LARGE, reply_markup=get_cancel_menu())
+    # Проверяем расширение
+    allowed_extensions = ['.docx', '.doc', '.pdf', '.txt', '.odt', '.rtf']
+    file_name = document.file_name.lower()
+    
+    if not any(file_name.endswith(ext) for ext in allowed_extensions):
+        await message.answer(
+            f"❌ Неподдерживаемый формат файла.\n"
+            f"Разрешены: {', '.join(allowed_extensions)}",
+            reply_markup=get_cancel_menu()
+        )
         return
     
-    allowed_types = [
-        'application/pdf',
-        'application/msword',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'text/plain'
-    ]
-    
-    if document.mime_type not in allowed_types:
-        await message.answer(Messages.ERROR_FILE_TYPE, reply_markup=get_cancel_menu())
+    # Проверяем размер (макс 50 МБ)
+    if document.file_size > 50 * 1024 * 1024:
+        await message.answer(
+            "❌ Файл слишком большой (максимум 50 МБ)",
+            reply_markup=get_cancel_menu()
+        )
         return
+    
+    await message.answer("⏳ Загружаю файл...")
     
     try:
-        file_obj = await message.bot.get_file(document.file_id)
-        file_bytes = await message.bot.download_file(file_obj.file_path)
-        file_content = file_bytes.read()
+        # Скачиваем файл
+        file = await message.bot.get_file(document.file_id)
+        file_data = await message.bot.download_file(file.file_path)
         
-        await state.update_data(
-            file_content=file_content,
-            filename=document.file_name,
-            mime_type=document.mime_type
+        # Получаем данные из состояния
+        data = await state.get_data()
+        student_id = data.get('student_id')
+        
+        # Сохраняем локально
+        local_path, file_uuid = local_file_service.save_work_file(
+            file_data=file_data.read(),
+            original_filename=document.file_name,
+            student_id=student_id,
+            work_id=str(uuid4())
         )
         
-        await show_confirmation(message, state)
+        await state.update_data(
+            file_path=local_path,
+            file_uuid=file_uuid,
+            file_name=document.file_name,
+            file_size=document.file_size
+        )
+        
+        await state.set_state(SubmitStates.waiting_confirm)
+        
+        # Показываем сводку
+        await show_summary(message, state)
         
     except Exception as e:
-        logger.error(f"File download error: {e}")
+        logger.error(f"Error saving file: {e}")
         await message.answer(
-            "❌ Ошибка при загрузке файла. Попробуйте ещё раз.",
-            reply_markup=get_cancel_menu()
+            "❌ Ошибка при сохранении файла. Попробуйте позже.",
+            reply_markup=get_main_menu()
         )
 
 
 @router.message(SubmitStates.waiting_file, F.text == "/skip")
 async def skip_file(message: Message, state: FSMContext):
-    """Пропустить загрузку файла"""
-    await state.update_data(file_content=None, filename=None, mime_type=None)
-    await show_confirmation(message, state)
+    """Пропуск загрузки файла"""
+    await state.update_data(file_path=None, file_name=None)
+    await state.set_state(SubmitStates.waiting_confirm)
+    await show_summary(message, state)
 
 
-async def show_confirmation(message: Message, state: FSMContext):
-    """Показать подтверждение"""
+async def show_summary(message: Message, state: FSMContext):
+    """Показать сводку перед сохранением"""
     data = await state.get_data()
     
-    work_type = data.get("work_type_name")
-    title = data.get("title")
-    deadline_str = data.get("deadline_str", "Не указан")
-    filename = data.get("filename", "Без файла")
+    text = f"""📋 <b>Проверьте данные:</b>
+
+📚 Тип: {data.get('work_type_name')}
+📝 Тема: {data.get('title')}
+📄 Описание: {data.get('description', 'нет')[:100]}{'...' if len(data.get('description', '')) > 100 else ''}
+📅 Дедлайн: {data.get('deadline').strftime('%d.%m.%Y')}
+📎 Файл: {data.get('file_name', 'не загружен')}
+
+✅ Всё верно?"""
     
-    await state.set_state(SubmitStates.confirm)
-    
-    await message.answer(
-        Messages.SUBMIT_CONFIRM.format(
-            work_type=work_type,
-            title=title,
-            deadline=deadline_str,
-            filename=filename
-        ),
-        reply_markup=get_yes_no_menu(),
-        parse_mode="HTML"
-    )
+    await message.answer(text, reply_markup=get_yes_no_menu(), parse_mode="HTML")
 
 
-@router.message(SubmitStates.confirm, F.text == "✅ Да")
-async def confirm_submission(message: Message, state: FSMContext):
-    """Подтверждение и сохранение работы"""
+@router.message(SubmitStates.waiting_confirm, F.text == "✅ Подтвердить")
+async def confirm_submit(message: Message, state: FSMContext):
+    """Сохранение работы в БД"""
     data = await state.get_data()
-    
-    student_id = data.get("student_id")
-    yandex_folder = data.get("yandex_folder")
-    title = data.get("title")
-    deadline = data.get("deadline")
-    file_content = data.get("file_content")
-    filename = data.get("filename")
-    work_type_code = data.get("work_type_code")
-    work_type_name = data.get("work_type_name")
-    
-    await message.answer("🔄 Сохраняю работу...")
     
     try:
-        from bot.models import AsyncSessionContext, StudentWork, File, WorkType
-        import os
-        
         async with AsyncSessionContext() as session:
-            result = await session.execute(
-                select(WorkType).where(WorkType.code == work_type_code)
-            )
-            work_type = result.scalar_one_or_none()
-            
-            if not work_type:
-                work_type = WorkType(
-                    id=uuid4(),
-                    code=work_type_code,
-                    name=work_type_name
-                )
-                session.add(work_type)
-                await session.flush()
-            
-            work_id = uuid4()
+            # Создаём работу
             work = StudentWork(
-                id=work_id,
-                student_id=student_id,
-                work_type_id=work_type.id,
-                title=title,
-                status="submitted",
-                deadline=deadline,
+                id=uuid4(),
+                student_id=data.get('student_id'),
+                title=data.get('title'),
+                description=data.get('description'),
+                deadline=data.get('deadline'),
+                status='submitted',
+                yandex_file_path=data.get('file_path'),  # Теперь это локальный путь
                 submitted_at=datetime.utcnow()
             )
-            session.add(work)
             
-            if file_content and filename:
-                yandex_token = os.getenv("YANDEX_DISK_TOKEN", "")
-                yandex = YandexDiskService(yandex_token)
-                yandex_path = await yandex.upload_student_file(
-                    file_data=file_content,
-                    filename=filename,
-                    student_folder=yandex_folder,
-                    work_id=str(work_id)
-                )
-                
-                file_record = File(
-                    id=uuid4(),
-                    work_id=work_id,
-                    filename=filename,
-                    original_name=filename,
-                    mime_type=data.get("mime_type", "application/octet-stream"),
-                    size_bytes=len(file_content),
-                    storage_type="yandex",
-                    yandex_file_path=yandex_path
-                )
-                session.add(file_record)
+            session.add(work)
+            await session.commit()
+            
+            logger.info(f"Work saved: {work.id} for student {data.get('student_id')}")
         
         await message.answer(
-            Messages.SUBMIT_SUCCESS.format(
-                title=title,
-                deadline=data.get("deadline_str", "Не указан")
-            ),
+            "✅ <b>Работа успешно сохранена!</b>\n\n"
+            "Она появится в списке работ и будет проверена.",
             reply_markup=get_main_menu(),
             parse_mode="HTML"
         )
         
-        await state.clear()
-        
     except Exception as e:
-        logger.error(f"Submit error: {e}")
+        logger.error(f"Error saving work: {e}")
         await message.answer(
             "❌ Ошибка при сохранении работы. Попробуйте позже.",
             reply_markup=get_main_menu()
         )
-        await state.clear()
+    
+    await state.clear()
 
 
-@router.message(SubmitStates.confirm, F.text == "❌ Нет")
+@router.message(SubmitStates.waiting_confirm, F.text == "❌ Отменить")
 async def cancel_submit(message: Message, state: FSMContext):
     """Отмена сдачи работы"""
+    data = await state.get_data()
+    
+    # Удаляем загруженный файл если есть
+    file_path = data.get('file_path')
+    if file_path:
+        local_file_service.delete_file(file_path)
+    
     await state.clear()
     await message.answer(
-        Messages.CONFIRM_CANCEL,
+        "❌ Сдача работы отменена",
         reply_markup=get_main_menu()
     )

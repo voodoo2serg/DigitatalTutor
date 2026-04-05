@@ -4,7 +4,7 @@ services:
   # === Backend API ===
   backend:
     build:
-      context: ./backend
+      context: ./bot
       dockerfile: Dockerfile
     container_name: digitatal-backend
     restart: always
@@ -25,8 +25,7 @@ services:
   # === Telegram Bot ===
   bot:
     build:
-      context: ./backend
-      dockerfile: Dockerfile.bot
+      context: ./bot
     container_name: digitatal-bot
     restart: always
     env_file:
@@ -35,6 +34,7 @@ services:
       - backend
       - postgres
     volumes:
+      - student_files:/app/data/student_files
       - ./bot:/app/bot
     networks:
       - digitatal-network
@@ -119,6 +119,7 @@ volumes:
   minio_data:
   redis_data:
   uploads:
+  student_files:
 
 networks:
   digitatal-network:

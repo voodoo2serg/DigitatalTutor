@@ -8,7 +8,7 @@ from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import select
+from sqlalchemy import select, func
 from uuid import uuid4
 
 from bot.keyboards import get_main_menu, get_role_selection_menu, get_cancel_menu
@@ -78,6 +78,20 @@ async def process_fio(message: Message, state: FSMContext):
             reply_markup=get_cancel_menu()
         )
         return
+
+    # Проверка на дубликаты по ФИО
+    async with AsyncSessionContext() as session:
+        surname = fio.split()[0].lower()
+        result = await session.execute(
+            select(User).where(func.lower(User.full_name).like(f"%{surname}%"))
+        )
+        similar = result.scalars().all()
+        if similar:
+            await message.answer(
+                f"⚠️ В системе есть похожие имена: {', '.join([u.full_name for u in similar[:3]])}",
+                reply_markup=get_yes_no_menu()
+            )
+            return
     
     await state.update_data(fio=fio)
     await state.set_state(RegistrationStates.waiting_group)
