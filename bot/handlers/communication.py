@@ -92,6 +92,7 @@ async def process_message(message: Message, state: FSMContext):
                 created_at=datetime.utcnow()
             )
             session.add(comm)
+            await session.commit()
         
         # Уведомляем админов
         try:
