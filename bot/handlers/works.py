@@ -1,5 +1,7 @@
 """
-DigitalTutor Bot - Works Handler (Fixed with file download + delete)
+DigitalTutor Bot - Works Handler (Updated with Grading)
+TICKET-3.1: Added grade button in admin work details
+TICKET-3.2: Archive filter in works list
 """
 import logging
 import uuid
@@ -12,7 +14,6 @@ from datetime import datetime
 from bot.keyboards import get_main_menu, get_admin_menu
 from bot.templates.messages import Messages
 from bot.models import AsyncSessionContext, StudentWork, File
-from bot.services.minio_service import get_file_download_url, download_file_to_temp
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -29,6 +30,9 @@ STATUS_INFO = {
     "revision_required": {"emoji": "🔄", "name": "Требует доработки"},
     "accepted": {"emoji": "✅", "name": "Принята"},
     "rejected": {"emoji": "🗑️", "name": "Удалена"},
+    "approved_for_publication": {"emoji": "📰", "name": "Согласована для публикации"},
+    "admitted_to_defense": {"emoji": "🎓", "name": "Допущена к защите"},
+    "graded": {"emoji": "⭐", "name": "Оценена"},
 }
 
 
@@ -39,7 +43,7 @@ def get_work_messages_map():
 
 @router.message(F.text == "📋 Мои работы")
 async def list_my_works(message: Message):
-    """Показать список работ студента"""
+    """Показать список работ студента (без архивных)"""
     telegram_id = message.from_user.id
     
     async with AsyncSessionContext() as session:
@@ -53,10 +57,12 @@ async def list_my_works(message: Message):
             await message.answer(Messages.ERROR_REGISTRATION_INCOMPLETE)
             return
         
+        # TICKET-3.2: Exclude archived works for students
         result = await session.execute(
             select(StudentWork).where(
                 StudentWork.student_id == user.id,
-                StudentWork.status != "rejected"
+                StudentWork.status != "rejected",
+                StudentWork.is_archived == False
             )
         )
         works = result.scalars().all()
@@ -89,7 +95,7 @@ async def list_my_works(message: Message):
 
 @router.message(F.text == "📋 Все работы")
 async def list_all_works(message: Message):
-    """Админ: показать все работы"""
+    """Админ: показать активные работы (не архивные)"""
     telegram_id = message.from_user.id
     
     if telegram_id not in ADMIN_IDS:
@@ -97,17 +103,21 @@ async def list_all_works(message: Message):
     
     async with AsyncSessionContext() as session:
         from bot.models import User
+        # TICKET-3.2: Exclude archived works by default
         result = await session.execute(
-            select(StudentWork).where(StudentWork.status != "rejected")
+            select(StudentWork).where(
+                StudentWork.status != "rejected",
+                StudentWork.is_archived == False
+            )
             .order_by(StudentWork.created_at.desc()).limit(10)
         )
         works = result.scalars().all()
         
         if not works:
-            await message.answer("Нет работ в системе", reply_markup=get_admin_menu())
+            await message.answer("Нет активных работ в системе", reply_markup=get_admin_menu())
             return
         
-        await message.answer("📋 <b>Последние 10 работ:</b>", parse_mode="HTML")
+        await message.answer("📋 <b>Последние 10 активных работ:</b>", parse_mode="HTML")
         
         for work in works:
             status_info = STATUS_INFO.get(work.status, {"emoji": "❓", "name": work.status})
@@ -137,7 +147,7 @@ async def list_all_works(message: Message):
 
 @router.callback_query(F.data.startswith("work:"))
 async def show_work_details(callback_query: CallbackQuery):
-    """Показать детали работы"""
+    """Показать детали работы (для студента)"""
     work_id_str = callback_query.data.split(":")[1]
     work_id = uuid.UUID(work_id_str)
     
@@ -205,7 +215,7 @@ async def show_work_details(callback_query: CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin_work:"))
 async def show_admin_work_details(callback_query: CallbackQuery):
-    """Показать детали работы для админа с кнопками управления"""
+    """Показать детали работы для админа с кнопкой оценки (TICKET-3.1)"""
     work_id_str = callback_query.data.split(":")[1]
     work_id = uuid.UUID(work_id_str)
     
@@ -250,6 +260,19 @@ async def show_admin_work_details(callback_query: CallbackQuery):
                     )
                 )
         
+        # TICKET-3.1: Show grades if they exist
+        grade_text = ""
+        if work.grade_classic or work.grade_100 or work.grade_letter:
+            grade_text = "\n⭐ <b>Оценка:</b>\n"
+            if work.grade_classic:
+                grade_text += f"   Классическая: {work.grade_classic}\n"
+            if work.grade_100:
+                grade_text += f"   100-бальная: {work.grade_100}\n"
+            if work.grade_letter:
+                grade_text += f"   Буквенная: {work.grade_letter}\n"
+            if work.is_archived:
+                grade_text += "   📁 В архиве\n"
+        
         text = f"""{status_info['emoji']} <b>{work.title}</b>
 👤 Студент: {student_name}
 
@@ -260,20 +283,25 @@ async def show_admin_work_details(callback_query: CallbackQuery):
 📝 Описание:
 {work.description or "Нет описания"}
 {files_text}
-✍️ Рецензия: {work.teacher_comment or "Не написана"}"""
+✍️ Рецензия: {work.teacher_comment or "Не написана"}{grade_text}"""
         
         # Build keyboard
         keyboard_rows = []
         for btn in keyboard_buttons:
             keyboard_rows.append([btn])
         
-        # Action buttons
+        # Action buttons - TICKET-3.1: Added grade button
         keyboard_rows.append([
             InlineKeyboardButton(text="✅ Принять", callback_data=f"accept_work:{work.id}"),
             InlineKeyboardButton(text="🔄 На доработку", callback_data=f"revise_work:{work.id}")
         ])
         keyboard_rows.append([
+            InlineKeyboardButton(text="🤖 AI-рецензия", callback_data=f"ai_review:{work.id}"),
             InlineKeyboardButton(text="✍️ Рецензия", callback_data=f"add_review:{work.id}"),
+        ])
+        # TICKET-3.1: Grade button
+        keyboard_rows.append([
+            InlineKeyboardButton(text="⭐ Оценить", callback_data=f"grade_work:{work.id}"),
             InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"confirm_delete:{work.id}")
         ])
         keyboard_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_main")])
@@ -286,7 +314,7 @@ async def show_admin_work_details(callback_query: CallbackQuery):
 
 @router.callback_query(F.data.startswith("dl:"))
 async def download_file_handler(callback_query: CallbackQuery):
-    """Скачать и отправить файл пользователю (ИСПРАВЛЕНО - локальные файлы)"""
+    """Скачать и отправить файл пользователю"""
     file_id_str = callback_query.data.split(":")[1]
     file_id = uuid.UUID(file_id_str)
     
@@ -307,7 +335,6 @@ async def download_file_handler(callback_query: CallbackQuery):
         if file_record.storage_path and os.path.exists(file_record.storage_path):
             local_path = file_record.storage_path
         else:
-            # Ищем по имени в стандартной папке
             possible_path = f"/app/data/student_files/{file_record.filename}"
             if os.path.exists(possible_path):
                 local_path = possible_path
@@ -315,17 +342,15 @@ async def download_file_handler(callback_query: CallbackQuery):
         temp_path = None
         try:
             if local_path:
-                # Файл найден локально - используем его
                 document = FSInputFile(local_path, filename=file_record.original_name or file_record.filename)
             else:
-                # Пробуем скачать из MinIO
+                from bot.services.minio_service import download_file_to_temp
                 temp_path = await download_file_to_temp(file_record.filename)
                 if not temp_path:
                     await callback_query.answer("❌ Файл не найден в хранилище", show_alert=True)
                     return
                 document = FSInputFile(temp_path, filename=file_record.original_name or file_record.filename)
             
-            # Send file to user
             await callback_query.message.answer_document(
                 document=document,
                 caption=f"📄 {file_record.original_name or file_record.filename}"
@@ -335,7 +360,6 @@ async def download_file_handler(callback_query: CallbackQuery):
             logger.error(f"Error sending file: {e}")
             await callback_query.answer("❌ Ошибка отправки файла", show_alert=True)
         finally:
-            # Clean up temp file if it was created
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
@@ -383,7 +407,6 @@ async def start_add_review(callback_query: CallbackQuery, state):
     work_id_str = callback_query.data.split(":")[1]
     work_id = uuid.UUID(work_id_str)
     
-    # Store work_id in state
     await state.update_data(review_work_id=work_id_str)
     await state.set_state("waiting_review_text")
     
@@ -413,7 +436,6 @@ async def accept_work(callback_query: CallbackQuery):
         
         if work:
             await callback_query.answer("✅ Работа принята!")
-            # Refresh the view
             await show_admin_work_details(callback_query)
 
 
@@ -481,3 +503,10 @@ async def delete_work(callback_query: CallbackQuery):
                     [InlineKeyboardButton(text="👥 К списку студентов", callback_data="back_to_list")]
                 ])
             )
+
+
+@router.callback_query(F.data == "back_to_main")
+async def back_to_main(callback_query: CallbackQuery):
+    """Вернуться в главное меню"""
+    await callback_query.message.delete()
+    await callback_query.answer()

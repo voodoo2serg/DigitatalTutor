@@ -1,3 +1,6 @@
+# models.py - DigitalTutor Database Models
+# TICKET-3.1: Added grading fields
+
 import uuid
 from datetime import datetime
 from sqlalchemy import DECIMAL, Column, String, DateTime, Boolean, Integer, BigInteger, Text, Numeric, ForeignKey, JSON
@@ -21,7 +24,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
-    yandex_folder = Column(String(255))  # Папка на Яндекс.Диске
+    yandex_folder = Column(String(255))
     
     works = relationship("StudentWork", back_populates="student")
 
@@ -56,6 +59,14 @@ class StudentWork(Base):
     teacher_comment = Column(Text)
     teacher_reviewed_at = Column(DateTime)
     
+    # === GRADING FIELDS (TICKET-3.1) ===
+    grade_classic = Column(Integer)  # 1-5 шкала
+    grade_100 = Column(Integer)      # 0-100 шкала
+    grade_letter = Column(String(1)) # A-E
+    grade_comment = Column(Text)     # комментарий к оценке
+    is_archived = Column(Boolean, default=False)  # TICKET-3.2: автоархивация
+    graded_at = Column(DateTime)     # когда оценили
+    
     # Antiplagiarism fields
     antiplag_system = Column(String(50))
     antiplag_originality_percent = Column(Numeric(5, 2))
@@ -65,14 +76,15 @@ class StudentWork(Base):
     ai_provider = Column(String(50))
     analysis_started_at = Column(DateTime)
     
-    # AI Generated Response for Student (Option B)
-    ai_student_response = Column(JSONB)  # {greeting, strengths, weaknesses, recommendations, conclusion, full_text}
-    ai_student_response_status = Column(String(50), default=None)  # pending_review, approved, sent
+    # AI Generated Response for Student
+    ai_student_response = Column(JSONB)
+    ai_student_response_status = Column(String(50), default=None)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
     submitted_at = Column(DateTime)
     deadline = Column(DateTime)
+
     
     student = relationship("User", back_populates="works")
     files = relationship("File", back_populates="work")
@@ -90,7 +102,7 @@ class File(Base):
     storage_type = Column(String(20), default='minio')
     storage_path = Column(String(500))
     storage_bucket = Column(String(100))
-    yandex_file_path = Column(String(500))  # Path on Yandex.Disk
+    yandex_file_path = Column(String(500))
     ai_extracted_text = Column(Text)
     ai_analysis_status = Column(String(50), default='pending')
     ai_analysis_result = Column(JSONB)
@@ -108,7 +120,7 @@ class Communication(Base):
     to_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     channel = Column(String(20), default='telegram')
     message_type = Column(String(20), default='text')
-    message = Column(Text)  # Alias for content
+    message = Column(Text)
     content = Column(Text)
     content_transcription = Column(Text)
     telegram_message_id = Column(BigInteger)
@@ -122,7 +134,6 @@ class Communication(Base):
     work = relationship("StudentWork", back_populates="communications")
 
 class AISkillConfig(Base):
-    """Конфигурация AI-провайдеров"""
     __tablename__ = "ai_skills_config"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -133,10 +144,7 @@ class AISkillConfig(Base):
     config_json = Column(JSONB)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
-
-
-# ============== AI SYSTEM MODELS ==============
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class AIProvider(Base):
     __tablename__ = "ai_providers"
@@ -150,7 +158,6 @@ class AIProvider(Base):
     rate_limit_per_minute = Column(Integer, default=60)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
 
 class AIAnalysisLog(Base):
     __tablename__ = "ai_analysis_logs"
@@ -168,14 +175,13 @@ class AIAnalysisLog(Base):
     processing_time_ms = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-
 class MessageTemplate(Base):
     __tablename__ = "message_templates"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(100), nullable=False)
-    category = Column(String(50), nullable=False)  # auto_response, bulk_mail, report, ai_check
-    trigger_event = Column(String(50))  # on_submit, on_status_change, on_analysis_complete, manual
+    category = Column(String(50), nullable=False)
+    trigger_event = Column(String(50))
     subject_template = Column(Text)
     body_template = Column(Text, nullable=False)
     variables = Column(JSONB, default=list)
@@ -184,7 +190,6 @@ class MessageTemplate(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-
 class BulkMessage(Base):
     __tablename__ = "bulk_messages"
     
@@ -192,14 +197,11 @@ class BulkMessage(Base):
     from_admin_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     message = Column(Text, nullable=False)
     file_path = Column(String(500))
-    recipient_type = Column(String(20))  # all, group, student
+    recipient_type = Column(String(20))
     recipient_filter = Column(String(255))
     sent_at = Column(DateTime, default=datetime.utcnow)
     recipient_count = Column(Integer, default=0)
-    status = Column(String(20), default="pending")  # pending, sending, sent, failed
-
-
-# ============== AI QUEUE MODELS ==============
+    status = Column(String(20), default="pending")
 
 class AIAnalysisQueue(Base):
     __tablename__ = "ai_analysis_queue"
@@ -221,7 +223,6 @@ class AIAnalysisQueue(Base):
     completed_at = Column(DateTime)
     processed_by = Column(String(100))
 
-
 class AIProcessorHeartbeat(Base):
     __tablename__ = "ai_processor_heartbeat"
     
@@ -234,3 +235,18 @@ class AIProcessorHeartbeat(Base):
     error_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+# TACKET-3.1: Grading System Fields - added to StudentWork
+
+# TACKET-4.1: AntiplagRequest Model
+class AntiplagRequest(Base):
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    work_id = Column(UUID(as_uuid=True), ForeignKey("student_works.id", ondelete="CASCADE"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    request_type = Column(String(20))  # primary, revision
+    status = Column(String(20), default="pending")
+    code = Column(String(255))
+    uniqueness_percent = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
