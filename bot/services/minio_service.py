@@ -1,105 +1,88 @@
 """
-MinIO Service for DigitalTutor Bot - File operations
-ИСПРАВЛЕНО: Сначала ищем файлы локально, потом в MinIO
+DigitalTutor Bot - MinIO Service (Fallback)
+Заглушка для обратной совместимости.
+Использует LocalFileService и YandexDiskService.
+
+FIX: BUG-008 - исправлено скачивание файлов
 """
 import logging
 import os
-import httpx
+import tempfile
 from pathlib import Path
+from typing import Optional
+
+from bot.services.local_file_service import local_file_service
+from bot.services.yandex_service import yandex_service
 
 logger = logging.getLogger(__name__)
 
-# MinIO configuration
-MINIO_EXTERNAL_ENDPOINT = os.getenv("MINIO_EXTERNAL_ENDPOINT", "213.171.9.30:9000")
-MINIO_BUCKET = os.getenv("MINIO_BUCKET", "student-works")
-MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
-# Local storage path - должен совпадать с local_file_service
-LOCAL_STORAGE_PATH = Path("/app/data/student_files")
-
-
-def get_file_download_url(filename: str, expiry: int = 3600) -> str:
-    """Generate direct download URL for file"""
+async def get_file_download_url(filename: str, use_yandex: bool = True) -> Optional[str]:
+    """
+    Получить URL для скачивания файла.
+    
+    Args:
+        filename: Имя файла или путь
+        use_yandex: Использовать Яндекс.Диск если доступен
+    
+    Returns:
+        URL для скачивания или None
+    """
     try:
-        protocol = "https" if MINIO_SECURE else "http"
-        url = f"{protocol}://{MINIO_EXTERNAL_ENDPOINT}/{MINIO_BUCKET}/{filename}"
-        return url
+        # Пробуем получить публичную ссылку из Яндекс.Диска
+        if use_yandex and yandex_service.token:
+            # Предполагаем что файл уже на Яндекс.Диске
+            public_url = await yandex_service.get_public_link(filename)
+            if public_url:
+                return public_url
+        
+        # Если не получилось - возвращаем None (файл будет отправлен напрямую)
+        return None
+    
     except Exception as e:
-        logger.error(f"Error generating download URL for {filename}: {e}")
+        logger.error(f"Error getting download URL for {filename}: {e}")
         return None
 
 
-def find_local_file(filename: str) -> str:
+async def download_file_to_temp(file_path: str) -> Optional[str]:
     """
-    Искать файл локально в разных местах
-    Returns: полный путь к файлу или None
-    """
-    # Варианты где может быть файл
-    possible_paths = [
-        LOCAL_STORAGE_PATH / filename,
-        LOCAL_STORAGE_PATH / "works" / filename,
-        Path(f"/tmp/{filename}"),
-    ]
+    Скачать файл во временную директорию.
     
-    # Ищем по всей структуре works/
-    works_dir = LOCAL_STORAGE_PATH / "works"
-    if works_dir.exists():
-        for path in works_dir.rglob(filename):
-            if path.is_file():
-                logger.info(f"Local file found via rglob: {path}")
-                return str(path)
-    
-    # Проверяем стандартные пути
-    for path in possible_paths:
-        if path.exists():
-            logger.info(f"Local file found: {path}")
-            return str(path)
-    
-    # Если имя файла содержит путь - ищем по частям
-    if "/" in filename or "\\" in filename:
-        # Пробуем найти только по имени файла
-        basename = os.path.basename(filename)
-        if works_dir.exists():
-            for path in works_dir.rglob(basename):
-                if path.is_file():
-                    logger.info(f"Local file found by basename: {path}")
-                    return str(path)
-    
-    return None
-
-
-async def download_file_to_temp(filename: str) -> str:
-    """
-    Download file to temporary location
-    ИСПРАВЛЕНО: Сначала ищем локально, потом пытаемся скачать из MinIO
+    Args:
+        file_path: Путь к файлу (локальный или на Яндекс.Диске)
     
     Returns:
-        Path to file or None if error
+        Путь к временному файлу или None
     """
-    # СНАЧАЛА ищем локально
-    local_path = find_local_file(filename)
-    if local_path:
-        return local_path
-    
-    # Если не нашли локально - пробуем скачать из MinIO (для старых файлов)
     try:
-        url = get_file_download_url(filename)
-        if not url:
-            return None
-        
-        # Извлекаем basename для сохранения
-        basename = os.path.basename(filename)
-        temp_path = f"/tmp/{basename}"
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=60.0)
-            response.raise_for_status()
+        # Проверяем если это локальный файл
+        if os.path.exists(file_path):
+            # Копируем во временную директорию
+            temp_dir = tempfile.gettempdir()
+            temp_path = os.path.join(temp_dir, os.path.basename(file_path))
             
-            with open(temp_path, "wb") as f:
-                f.write(response.content)
+            with open(file_path, 'rb') as src:
+                with open(temp_path, 'wb') as dst:
+                    dst.write(src.read())
+            
+            logger.info(f"File copied to temp: {temp_path}")
+            return temp_path
         
-        logger.info(f"File downloaded from MinIO: {temp_path}")
-        return temp_path
+        # Пробуем получить из локального сервиса
+        file_data = local_file_service.get_file(file_path)
+        if file_data:
+            temp_dir = tempfile.gettempdir()
+            temp_path = os.path.join(temp_dir, os.path.basename(file_path))
+            
+            with open(temp_path, 'wb') as f:
+                f.write(file_data)
+            
+            logger.info(f"File retrieved from local storage: {temp_path}")
+            return temp_path
+        
+        logger.warning(f"File not found: {file_path}")
+        return None
+    
     except Exception as e:
-        logger.error(f"Error downloading file {filename} from MinIO: {e}")
+        logger.error(f"Error downloading file {file_path}: {e}")
         return None

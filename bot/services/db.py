@@ -1,7 +1,11 @@
 """
 DigitalTutor Bot - Database Service
 Сервис для работы с базой данных
+
+FIX: DT-REPAIR-001 - SQLAlchemy MissingGreenlet
+Используем @asynccontextmanager для правильной работы с async сессиями
 """
+from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 import os
@@ -26,8 +30,35 @@ AsyncSessionLocal = async_sessionmaker(
 Base = declarative_base()
 
 
+@asynccontextmanager
+async def get_async_session():
+    """
+    Асинхронный контекстный менеджер для сессий БД.
+    
+    FIX: Используем @asynccontextmanager вместо async generator
+    для предотвращения MissingGreenlet ошибок.
+    
+    Usage:
+        async with get_async_session() as session:
+            result = await session.execute(query)
+    """
+    session = AsyncSessionLocal()
+    try:
+        yield session
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
+
+
 class AsyncSessionContext:
-    """Контекстный менеджер для сессий БД"""
+    """
+    Класс-обертка для сессий БД.
+    
+    DEPRECATED: Используйте get_async_session() с @asynccontextmanager
+    """
     
     def __init__(self):
         self.session = None
