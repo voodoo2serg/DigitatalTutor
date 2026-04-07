@@ -31,6 +31,9 @@ class Config:
             self.ADMIN_IDS = [502621151]  # @voodoo_cap
 
 
+# Throttling для массовых рассылок (в секундах)
+THROTTLING_DELAY = int(os.getenv("THROTTLING_DELAY", "15"))  # по умолчанию 15 сек
+
 # Инициализация конфигурации
 config = Config()
 

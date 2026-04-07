@@ -4,12 +4,17 @@ DigitalTutor Bot - Mass Messaging Handler
 """
 import logging
 import asyncio
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram import Router, F, Bot
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, 
+    FSInputFile, ReplyKeyboardRemove
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import select, update
-from datetime import datetime
+from sqlalchemy import select, update, and_
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any
+import os
 
 from bot.keyboards import get_admin_menu, get_cancel_menu
 from bot.models import AsyncSessionContext, User, StudentWork
@@ -21,15 +26,38 @@ router = Router()
 class MassMessagingStates(StatesGroup):
     selecting_students = State()
     composing_message = State()
+    setting_throttling = State()
+    setting_deadline = State()
     confirming_send = State()
+    waiting_for_file = State()
 
 # Хранение данных рассылки (временно, для FSM)
 # В продакшене лучше использовать Redis или базу данных
 
 ADMIN_IDS = [502621151]
 
-# Настройка throttling (в секундах)
-DEFAULT_THROTTLING = 15
+# Настройка throttling (в секундах) - берётся из env или 15 по умолчанию
+DEFAULT_THROTTLING = int(os.getenv("THROTTLING_DELAY", "15"))
+
+# Типы работ для фильтрации
+WORK_TYPE_FILTERS = {
+    "all": "Все типы",
+    "vkr": "🎓 ВКР",
+    "article": "📄 Статья",
+    "essay": "📝 Реферат",
+    "project": "🔧 Проект",
+    "coursework": "📚 Курсовая",
+}
+
+# Маппинг типов работ
+WORK_TYPE_MAPPING = {
+    "ВКР (Бакалавр)": "vkr",
+    "ВКР (Магистр)": "vkr",
+    "Научная статья": "article",
+    "Реферат": "essay",
+    "Проект": "project",
+    "Курсовая работа": "coursework",
+}
 
 
 def get_work_type_emoji(work_type: str) -> str:
@@ -45,7 +73,7 @@ def get_work_type_emoji(work_type: str) -> str:
     return emoji_map.get(work_type, "📋")
 
 
-def get_student_status_color(student_id, works) -> str:
+def get_student_status_color(works: List[StudentWork]) -> str:
     """
     Определить цвет статуса студента:
     🔴 - есть просроченные работы ИЛИ >3 дней без ответа
@@ -75,10 +103,10 @@ def get_student_status_color(student_id, works) -> str:
         return "🟢"
 
 
-def get_student_work_status(student_id, works) -> str:
-    """Получить статус последней работы студента"""
+def get_latest_work_info(works: List[StudentWork]) -> tuple:
+    """Получить информацию о последней актуальной работе"""
     if not works:
-        return "нет работ"
+        return "⚪", "нет работ", None
     
     # Сортируем по дате создания (самая новая)
     latest_work = max(works, key=lambda w: w.created_at)
@@ -92,15 +120,50 @@ def get_student_work_status(student_id, works) -> str:
         "rejected": "отклонена",
     }
     
+    # Определяем цвет работы
+    now = datetime.utcnow()
+    if latest_work.deadline and latest_work.deadline < now:
+        work_color = "🔴"
+    elif latest_work.status == "accepted":
+        work_color = "🟢"
+    elif latest_work.status in ["submitted", "in_review"]:
+        work_color = "🟡"
+    else:
+        work_color = "🔴"
+    
     status_text = STATUS_MAP.get(latest_work.status, latest_work.status)
     work_type = latest_work.work_type or "работа"
     
-    return f"{work_type} ({status_text})"
+    return work_color, f"{work_type} ({status_text})", latest_work.id
+
+
+def filter_students_by_work_type(students_data: List[Dict], works_data: Dict, filter_type: str) -> List[Dict]:
+    """Фильтровать студентов по типу работы"""
+    if filter_type == "all":
+        return students_data
+    
+    filtered = []
+    for student in students_data:
+        student_id = student['id']
+        works = works_data.get(student_id, [])
+        
+        # Проверяем, есть ли у студента работа нужного типа
+        has_matching_work = False
+        for work in works:
+            work_type_key = WORK_TYPE_MAPPING.get(work.work_type, "")
+            if work_type_key == filter_type:
+                has_matching_work = True
+                break
+        
+        if has_matching_work:
+            filtered.append(student)
+    
+    return filtered
 
 
 @router.message(F.text == "📤 Массовая рассылка")
 async def start_mass_messaging(message: Message, state: FSMContext):
-    """Начать массовую рассылку - шаг 1: выбор студентов"""
+    """Начать массовую рассылку - шаг 1: выбор студентов с фильтрами"""
     telegram_id = message.from_user.id
     
     if telegram_id not in ADMIN_IDS:
@@ -120,19 +183,22 @@ async def start_mass_messaging(message: Message, state: FSMContext):
             await message.answer("❌ Нет зарегистрированных студентов.")
             return
         
-        # Получаем работы для определения статуса
+        # Получаем работы для всех студентов
         students_data = []
+        works_data = {}
+        
         for student in students:
             result = await session.execute(
                 select(StudentWork).where(StudentWork.student_id == student.id)
             )
             works = result.scalars().all()
+            works_data[str(student.id)] = works
             
-            color = get_student_status_color(student.id, works)
-            work_status = get_student_work_status(student.id, works)
+            color, work_status, _ = get_latest_work_info(works)
             
             students_data.append({
                 'id': str(student.id),
+                'telegram_id': student.telegram_id,
                 'name': student.full_name or f"User_{student.telegram_id}",
                 'color': color,
                 'work_status': work_status,
@@ -140,40 +206,129 @@ async def start_mass_messaging(message: Message, state: FSMContext):
             })
         
         # Сохраняем данные в FSM
-        await state.update_data(students_data=students_data, selected_students=[])
+        await state.update_data(
+            students_data=students_data,
+            works_data=works_data,
+            selected_students=[],
+            filter_type="all",
+            send_to_chat=True,
+            send_private=True,
+            attached_file=None,
+            new_deadline=None,
+            throttling_delay=DEFAULT_THROTTLING
+        )
         await state.set_state(MassMessagingStates.selecting_students)
         
-        # Формируем сообщение
-        text = "📤 <b>Массовая рассылка</b>\n\n"
-        text += "<b>Шаг 1:</b> Выберите студентов\n\n"
-        text += "Фильтры: [Все] [🔴] [🟡] [🟢]\n\n"
-        
-        # Кнопки для выбора студентов (по 1 в строке для удобства)
-        keyboard = []
-        for student in students_data[:20]:  # Показываем первые 20
-            emoji = "☑️" if student['id'] in [] else "☐"
-            keyboard.append([InlineKeyboardButton(
-                text=f"{student['color']} {emoji} {student['name']} — {student['work_status']}",
-                callback_data=f"toggle_student:{student['id']}"
-            )])
-        
-        # Кнопки управления
-        keyboard.append([
+        await show_student_selection(message, state)
+
+
+async def show_student_selection(message: Message, state: FSMContext, edit: bool = False):
+    """Показать список студентов для выбора"""
+    data = await state.get_data()
+    students_data = data.get('students_data', [])
+    works_data = data.get('works_data', {})
+    selected = data.get('selected_students', [])
+    filter_type = data.get('filter_type', 'all')
+    send_to_chat = data.get('send_to_chat', True)
+    send_private = data.get('send_private', True)
+    
+    # Фильтруем студентов
+    filtered_students = filter_students_by_work_type(students_data, works_data, filter_type)
+    
+    # Формируем сообщение
+    text = "📤 <b>Массовая рассылка</b>\n\n"
+    text += f"<b>Шаг 1:</b> Выберите студентов\n"
+    text += f"Выбрано: {len(selected)} из {len(filtered_students)}\n\n"
+    
+    # Кнопки фильтров
+    filter_buttons = []
+    for key, label in WORK_TYPE_FILTERS.items():
+        if key == filter_type:
+            label = f"✓ {label}"
+        filter_buttons.append(InlineKeyboardButton(
+            text=label,
+            callback_data=f"filter_type:{key}"
+        ))
+    
+    # Разбиваем фильтры по 3 в строку
+    filter_rows = [filter_buttons[i:i+3] for i in range(0, len(filter_buttons), 3)]
+    
+    # Кнопки для выбора студентов (по 1 в строке для удобства)
+    student_buttons = []
+    for student in filtered_students[:20]:  # Показываем первые 20
+        emoji = "☑️" if student['id'] in selected else "☐"
+        student_buttons.append([InlineKeyboardButton(
+            text=f"{student['color']} {emoji} {student['name']} — {student['work_status']}",
+            callback_data=f"toggle_student:{student['id']}"
+        )])
+    
+    # Кнопки управления
+    control_buttons = [
+        [
             InlineKeyboardButton(text="✅ Выбрать все", callback_data="select_all"),
             InlineKeyboardButton(text="❌ Снять все", callback_data="deselect_all")
-        ])
-        keyboard.append([
-            InlineKeyboardButton(text="➡️ Далее", callback_data="go_to_message")
-        ])
-        keyboard.append([
-            InlineKeyboardButton(text="🚫 Отмена", callback_data="cancel_broadcast")
-        ])
-        
+        ]
+    ]
+    
+    # Галочки отправки
+    chat_emoji = "☑️" if send_to_chat else "☐"
+    private_emoji = "☑️" if send_private else "☐"
+    send_options = [
+        InlineKeyboardButton(text=f"{chat_emoji} В чат (бот)", callback_data="toggle_send_chat"),
+        InlineKeyboardButton(text=f"{private_emoji} Личное сообщение", callback_data="toggle_send_private")
+    ]
+    
+    next_button = [InlineKeyboardButton(
+        text=f"➡️ Далее: Составить сообщение ({len(selected)})", 
+        callback_data="go_to_message"
+    )]
+    cancel_button = [InlineKeyboardButton(text="🚫 Отмена", callback_data="cancel_broadcast")]
+    
+    # Собираем клавиатуру
+    keyboard = filter_rows + student_buttons + control_buttons + [send_options] + [next_button] + [cancel_button]
+    
+    if edit and message.text:
+        await message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+            parse_mode="HTML"
+        )
+    else:
         await message.answer(
             text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
             parse_mode="HTML"
         )
+
+
+@router.callback_query(F.data.startswith("filter_type:"))
+async def set_filter_type(callback: CallbackQuery, state: FSMContext):
+    """Установить фильтр по типу работы"""
+    filter_type = callback.data.split(":")[1]
+    
+    await state.update_data(filter_type=filter_type)
+    await show_student_selection(callback.message, state, edit=True)
+    await callback.answer(f"Фильтр: {WORK_TYPE_FILTERS.get(filter_type, 'Все')}")
+
+
+@router.callback_query(F.data == "toggle_send_chat")
+async def toggle_send_chat(callback: CallbackQuery, state: FSMContext):
+    """Переключить отправку в чат"""
+    data = await state.get_data()
+    current = data.get('send_to_chat', True)
+    await state.update_data(send_to_chat=not current)
+    await show_student_selection(callback.message, state, edit=True)
+    await callback.answer("☑️ В чат" if not current else "☐ В чат")
+
+
+@router.callback_query(F.data == "toggle_send_private")
+async def toggle_send_private(callback: CallbackQuery, state: FSMContext):
+    """Переключить личное сообщение"""
+    data = await state.get_data()
+    current = data.get('send_private', True)
+    await state.update_data(send_private=not current)
+    await show_student_selection(callback.message, state, edit=True)
+    await callback.answer("☑️ Личное сообщение" if not current else "☐ Личное сообщение")
 
 
 @router.callback_query(F.data.startswith("toggle_student:"))
@@ -183,7 +338,6 @@ async def toggle_student_selection(callback: CallbackQuery, state: FSMContext):
     
     data = await state.get_data()
     selected = data.get('selected_students', [])
-    students_data = data.get('students_data', [])
     
     if student_id in selected:
         selected.remove(student_id)
@@ -191,91 +345,32 @@ async def toggle_student_selection(callback: CallbackQuery, state: FSMContext):
         selected.append(student_id)
     
     await state.update_data(selected_students=selected)
-    
-    # Обновляем клавиатуру
-    keyboard = []
-    for student in students_data[:20]:
-        emoji = "☑️" if student['id'] in selected else "☐"
-        keyboard.append([InlineKeyboardButton(
-            text=f"{student['color']} {emoji} {student['name']} — {student['work_status']}",
-            callback_data=f"toggle_student:{student['id']}"
-        )])
-    
-    keyboard.append([
-        InlineKeyboardButton(text="✅ Выбрать все", callback_data="select_all"),
-        InlineKeyboardButton(text="❌ Снять все", callback_data="deselect_all")
-    ])
-    keyboard.append([
-        InlineKeyboardButton(text=f"➡️ Далее ({len(selected)} выбрано)", callback_data="go_to_message")
-    ])
-    keyboard.append([
-        InlineKeyboardButton(text="🚫 Отмена", callback_data="cancel_broadcast")
-    ])
-    
-    await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    await show_student_selection(callback.message, state, edit=True)
     await callback.answer()
 
 
 @router.callback_query(F.data == "select_all")
 async def select_all_students(callback: CallbackQuery, state: FSMContext):
-    """Выбрать всех студентов"""
+    """Выбрать всех студентов (с учётом фильтра)"""
     data = await state.get_data()
     students_data = data.get('students_data', [])
-    selected = [s['id'] for s in students_data]
+    works_data = data.get('works_data', {})
+    filter_type = data.get('filter_type', 'all')
+    
+    # Фильтруем студентов
+    filtered_students = filter_students_by_work_type(students_data, works_data, filter_type)
+    selected = [s['id'] for s in filtered_students]
     
     await state.update_data(selected_students=selected)
-    
-    # Обновляем клавиатуру
-    keyboard = []
-    for student in students_data[:20]:
-        keyboard.append([InlineKeyboardButton(
-            text=f"{student['color']} ☑️ {student['name']} — {student['work_status']}",
-            callback_data=f"toggle_student:{student['id']}"
-        )])
-    
-    keyboard.append([
-        InlineKeyboardButton(text="✅ Выбрать все", callback_data="select_all"),
-        InlineKeyboardButton(text="❌ Снять все", callback_data="deselect_all")
-    ])
-    keyboard.append([
-        InlineKeyboardButton(text=f"➡️ Далее ({len(selected)} выбрано)", callback_data="go_to_message")
-    ])
-    keyboard.append([
-        InlineKeyboardButton(text="🚫 Отмена", callback_data="cancel_broadcast")
-    ])
-    
-    await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    await show_student_selection(callback.message, state, edit=True)
     await callback.answer(f"Выбрано {len(selected)} студентов")
 
 
 @router.callback_query(F.data == "deselect_all")
 async def deselect_all_students(callback: CallbackQuery, state: FSMContext):
     """Снять выбор со всех"""
-    data = await state.get_data()
-    students_data = data.get('students_data', [])
-    
     await state.update_data(selected_students=[])
-    
-    # Обновляем клавиатуру
-    keyboard = []
-    for student in students_data[:20]:
-        keyboard.append([InlineKeyboardButton(
-            text=f"{student['color']} ☐ {student['name']} — {student['work_status']}",
-            callback_data=f"toggle_student:{student['id']}"
-        )])
-    
-    keyboard.append([
-        InlineKeyboardButton(text="✅ Выбрать все", callback_data="select_all"),
-        InlineKeyboardButton(text="❌ Снять все", callback_data="deselect_all")
-    ])
-    keyboard.append([
-        InlineKeyboardButton(text="➡️ Далее (0 выбрано)", callback_data="go_to_message")
-    ])
-    keyboard.append([
-        InlineKeyboardButton(text="🚫 Отмена", callback_data="cancel_broadcast")
-    ])
-    
-    await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    await show_student_selection(callback.message, state, edit=True)
     await callback.answer("Выбор снят")
 
 
@@ -284,28 +379,279 @@ async def go_to_message_composition(callback: CallbackQuery, state: FSMContext):
     """Переход к составлению сообщения"""
     data = await state.get_data()
     selected = data.get('selected_students', [])
+    send_to_chat = data.get('send_to_chat', True)
+    send_private = data.get('send_private', True)
     
     if not selected:
         await callback.answer("❌ Выберите хотя бы одного студента!", show_alert=True)
         return
     
+    if not send_to_chat and not send_private:
+        await callback.answer("❌ Выберите хотя бы один способ отправки!", show_alert=True)
+        return
+    
     await state.set_state(MassMessagingStates.composing_message)
     
     text = f"✉️ <b>Сообщение для {len(selected)} студентов</b>\n\n"
-    text += "Настройки:\n"
-    text += "☑️ Именное обращение включено (автоматически)\n\n"
-    text += "Введите текст сообщения:\n"
-    text += "<i>Используйте {'{имя}'} для подстановки имени студента</i>\n\n"
-    text += "Например:\n"
+    text += "<b>Настройки:</b>\n"
+    text += "☑️ Именное обращение (Привет, {имя}!)\n\n"
+    text += "📎 Прикрепить файл: [опционально]\n"
+    text += "📅 Новый дедлайн: [опционально]\n"
+    text += f"⏱️ Задержка между сообщениями: {DEFAULT_THROTTLING} сек\n\n"
+    text += "<b>Введите текст сообщения:</b>\n"
+    text += "<i>Используйте {имя} для подстановки имени студента</i>\n\n"
+    text += "<b>Например:</b>\n"
     text += '"Привет, {имя}! Напоминаю о дедлайне..."'
     
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📎 Прикрепить файл", callback_data="attach_file")],
+        [InlineKeyboardButton(text="📅 Указать дедлайн", callback_data="set_deadline")],
+        [InlineKeyboardButton(text="⚙️ Изменить задержку", callback_data="set_throttling")],
+        [InlineKeyboardButton(text="🚫 Отмена", callback_data="cancel_broadcast")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "attach_file")
+async def request_file(callback: CallbackQuery, state: FSMContext):
+    """Запросить файл для прикрепления"""
+    await state.set_state(MassMessagingStates.waiting_for_file)
+    
     await callback.message.edit_text(
-        text,
+        "📎 <b>Прикрепление файла</b>\n\n"
+        "Отправьте файл (документ, фото, видео).\n"
+        "Один файл будет отправлен всем выбранным студентам.\n\n"
+        "Или нажмите «Пропустить»",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚫 Отмена", callback_data="cancel_broadcast")]
+            [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="skip_file")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_message")]
         ]),
         parse_mode="HTML"
     )
+    await callback.answer()
+
+
+@router.message(MassMessagingStates.waiting_for_file)
+async def process_attached_file(message: Message, state: FSMContext):
+    """Обработка прикреплённого файла"""
+    file_info = None
+    
+    if message.document:
+        file_info = {
+            'file_id': message.document.file_id,
+            'file_name': message.document.file_name,
+            'file_type': 'document'
+        }
+    elif message.photo:
+        file_info = {
+            'file_id': message.photo[-1].file_id,
+            'file_name': 'photo.jpg',
+            'file_type': 'photo'
+        }
+    elif message.video:
+        file_info = {
+            'file_id': message.video.file_id,
+            'file_name': message.video.file_name or 'video.mp4',
+            'file_type': 'video'
+        }
+    
+    if file_info:
+        await state.update_data(attached_file=file_info)
+        await message.answer(
+            f"✅ Файл «{file_info['file_name']}» прикреплён!\n\n"
+            "Теперь введите текст сообщения:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_message")]
+            ])
+        )
+        await state.set_state(MassMessagingStates.composing_message)
+    else:
+        await message.answer(
+            "❌ Пожалуйста, отправьте файл (документ, фото или видео)",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="skip_file")]
+            ])
+        )
+
+
+@router.callback_query(F.data == "skip_file")
+async def skip_file(callback: CallbackQuery, state: FSMContext):
+    """Пропустить прикрепление файла"""
+    await state.update_data(attached_file=None)
+    await state.set_state(MassMessagingStates.composing_message)
+    
+    await callback.message.edit_text(
+        "✉️ <b>Введите текст сообщения:</b>\n\n"
+        "<i>Используйте {имя} для подстановки имени студента</i>\n\n"
+        "<b>Например:</b>\n"
+        '"Привет, {имя}! Напоминаю о дедлайне..."',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_filters")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "set_deadline")
+async def request_deadline(callback: CallbackQuery, state: FSMContext):
+    """Запросить новый дедлайн"""
+    await state.set_state(MassMessagingStates.setting_deadline)
+    
+    await callback.message.edit_text(
+        "📅 <b>Установка нового дедлайна</b>\n\n"
+        "Введите дату в формате <b>ДД.ММ.ГГГГ</b>\n"
+        "Например: 25.04.2026\n\n"
+        "Дедлайн будет обновлён у всех выбранных студентов.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="skip_deadline")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_message")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.message(MassMessagingStates.setting_deadline)
+async def process_deadline(message: Message, state: FSMContext):
+    """Обработка введённого дедлайна"""
+    deadline_text = message.text.strip()
+    
+    try:
+        # Парсим дату
+        deadline = datetime.strptime(deadline_text, "%d.%m.%Y")
+        deadline = deadline.replace(hour=23, minute=59)
+        
+        await state.update_data(new_deadline=deadline)
+        await state.set_state(MassMessagingStates.composing_message)
+        
+        await message.answer(
+            f"✅ Дедлайн установлен: <b>{deadline_text}</b>\n\n"
+            "Теперь введите текст сообщения:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_message")]
+            ]),
+            parse_mode="HTML"
+        )
+    except ValueError:
+        await message.answer(
+            "❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ\n"
+            "Например: 25.04.2026",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="skip_deadline")]
+            ])
+        )
+
+
+@router.callback_query(F.data == "skip_deadline")
+async def skip_deadline(callback: CallbackQuery, state: FSMContext):
+    """Пропустить установку дедлайна"""
+    await state.update_data(new_deadline=None)
+    await state.set_state(MassMessagingStates.composing_message)
+    
+    await callback.message.edit_text(
+        "✉️ <b>Введите текст сообщения:</b>\n\n"
+        "<i>Используйте {имя} для подстановки имени студента</i>\n\n"
+        "<b>Например:</b>\n"
+        '"Привет, {имя}! Напоминаю о дедлайне..."',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_filters")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "set_throttling")
+async def request_throttling(callback: CallbackQuery, state: FSMContext):
+    """Запросить задержку между сообщениями"""
+    await state.set_state(MassMessagingStates.setting_throttling)
+    
+    await callback.message.edit_text(
+        f"⚙️ <b>Настройка задержки между сообщениями</b>\n\n"
+        f"Текущее значение: <b>{DEFAULT_THROTTLING}</b> сек\n\n"
+        "Введите новое значение (в секундах):\n"
+        "Рекомендуется: 10-30 сек (чтобы избежать блокировки)",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="back_to_message")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.message(MassMessagingStates.setting_throttling)
+async def process_throttling(message: Message, state: FSMContext):
+    """Обработка задержки"""
+    try:
+        delay = int(message.text.strip())
+        if delay < 1 or delay > 300:
+            raise ValueError("Delay out of range")
+        
+        await state.update_data(throttling_delay=delay)
+        await state.set_state(MassMessagingStates.composing_message)
+        
+        await message.answer(
+            f"✅ Задержка установлена: <b>{delay}</b> сек\n\n"
+            "Теперь введите текст сообщения:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_message")]
+            ]),
+            parse_mode="HTML"
+        )
+    except ValueError:
+        await message.answer(
+            "❌ Введите число от 1 до 300 (секунд)",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Отмена", callback_data="back_to_message")]
+            ])
+        )
+
+
+@router.callback_query(F.data == "back_to_filters")
+async def back_to_filters(callback: CallbackQuery, state: FSMContext):
+    """Вернуться к выбору студентов"""
+    await state.set_state(MassMessagingStates.selecting_students)
+    await show_student_selection(callback.message, state, edit=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "back_to_message")
+async def back_to_message(callback: CallbackQuery, state: FSMContext):
+    """Вернуться к вводу сообщения"""
+    await state.set_state(MassMessagingStates.composing_message)
+    
+    data = await state.get_data()
+    attached_file = data.get('attached_file')
+    new_deadline = data.get('new_deadline')
+    throttling_delay = data.get('throttling_delay', DEFAULT_THROTTLING)
+    
+    text = "✉️ <b>Составление сообщения</b>\n\n"
+    
+    if attached_file:
+        text += f"📎 Файл: <b>{attached_file['file_name']}</b>\n"
+    else:
+        text += "📎 Файл: <i>не прикреплён</i>\n"
+    
+    if new_deadline:
+        text += f"📅 Дедлайн: <b>{new_deadline.strftime('%d.%m.%Y')}</b>\n"
+    else:
+        text += "📅 Дедлайн: <i>не указан</i>\n"
+    
+    text += f"⏱️ Задержка: <b>{throttling_delay}</b> сек\n\n"
+    text += "<b>Введите текст сообщения:</b>\n"
+    text += "<i>Используйте {имя} для подстановки имени студента</i>"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📎 Прикрепить файл", callback_data="attach_file")],
+        [InlineKeyboardButton(text="📅 Указать дедлайн", callback_data="set_deadline")],
+        [InlineKeyboardButton(text="⚙️ Изменить задержку", callback_data="set_throttling")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_filters")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
 
@@ -320,25 +666,55 @@ async def process_message_text(message: Message, state: FSMContext):
     message_text = message.text
     
     await state.update_data(message_text=message_text)
-    await state.set_state(MassMessagingStates.confirming_send)
     
+    # Переходим к подтверждению
+    await show_confirmation(message, state)
+
+
+async def show_confirmation(message: Message, state: FSMContext):
+    """Показать подтверждение перед отправкой"""
     data = await state.get_data()
     selected_count = len(data.get('selected_students', []))
+    message_text = data.get('message_text', '')
+    attached_file = data.get('attached_file')
+    new_deadline = data.get('new_deadline')
+    throttling_delay = data.get('throttling_delay', DEFAULT_THROTTLING)
+    send_to_chat = data.get('send_to_chat', True)
+    send_private = data.get('send_private', True)
     
     # Показываем предпросмотр
-    preview_text = f"👁️ <b>Предпросмотр сообщения:</b>\n\n"
-    preview_text += f"<i>Пример для студента Иванов И.И.:</i>\n"
+    preview_text = "👁️ <b>Предпросмотр рассылки</b>\n\n"
+    
+    # Пример для студента
+    preview_text += "<i>Пример для студента Иванов И.И.:</i>\n"
     preview_text += "━" * 20 + "\n"
-    preview_text += message_text.replace("{имя}", "Иванов И.И.") + "\n"
+    
+    # Добавляем приветствие
+    greeting = "Привет, Иванов И.И.! 👋\n\n" if "{имя}" in message_text else ""
+    preview_text += greeting + message_text.replace("{имя}", "Иванов И.И.") + "\n"
     preview_text += "━" * 20 + "\n\n"
-    preview_text += f"📊 Будет отправлено: <b>{selected_count}</b> студентам\n"
-    preview_text += f"⏱️ Задержка между сообщениями: <b>{DEFAULT_THROTTLING}</b> сек\n"
-    preview_text += f"⏱️ Примерное время: <b>{selected_count * DEFAULT_THROTTLING // 60}</b> мин\n\n"
-    preview_text += "Отправить?"
+    
+    # Информация о рассылке
+    preview_text += f"📊 <b>Параметры рассылки:</b>\n"
+    preview_text += f"• Получателей: <b>{selected_count}</b>\n"
+    preview_text += f"• Задержка: <b>{throttling_delay}</b> сек\n"
+    preview_text += f"• Примерное время: <b>{selected_count * throttling_delay // 60}</b> мин\n"
+    
+    if attached_file:
+        preview_text += f"• Файл: <b>{attached_file['file_name']}</b>\n"
+    
+    if new_deadline:
+        preview_text += f"• Новый дедлайн: <b>{new_deadline.strftime('%d.%m.%Y')}</b>\n"
+    
+    preview_text += f"• Отправка: {'в чат' if send_to_chat else ''} {'+ лично' if send_private else ''}\n\n"
+    preview_text += "<b>Отправить сообщения?</b>"
     
     await message.answer(
         preview_text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👁️ Предпросмотр", callback_data="preview_message"),
+            ],
             [
                 InlineKeyboardButton(text="📤 Отправить", callback_data="confirm_send"),
                 InlineKeyboardButton(text="✏️ Изменить", callback_data="edit_message")
@@ -347,14 +723,38 @@ async def process_message_text(message: Message, state: FSMContext):
         ]),
         parse_mode="HTML"
     )
+    await state.set_state(MassMessagingStates.confirming_send)
+
+
+@router.callback_query(F.data == "preview_message")
+async def preview_message(callback: CallbackQuery, state: FSMContext):
+    """Показать полный предпросмотр"""
+    data = await state.get_data()
+    message_text = data.get('message_text', '')
+    attached_file = data.get('attached_file')
+    
+    await callback.answer("Отправляю пример...")
+    
+    # Отправляем пример админу
+    example_text = message_text.replace("{имя}", callback.from_user.full_name or "Администратор")
+    
+    await callback.message.answer("👁️ <b>Пример сообщения:</b>\n\n" + example_text, parse_mode="HTML")
+    
+    if attached_file:
+        await callback.message.answer(f"📎 <b>Прикреплённый файл:</b> {attached_file['file_name']}")
 
 
 @router.callback_query(F.data == "confirm_send")
-async def confirm_and_send(callback: CallbackQuery, state: FSMContext):
-    """Подтверждение и отправка сообщений"""
+async def confirm_and_send(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Подтверждение и отправка сообщений с throttling"""
     data = await state.get_data()
     selected_ids = data.get('selected_students', [])
     message_text = data.get('message_text', '')
+    attached_file = data.get('attached_file')
+    new_deadline = data.get('new_deadline')
+    throttling_delay = data.get('throttling_delay', DEFAULT_THROTTLING)
+    send_to_chat = data.get('send_to_chat', True)
+    send_private = data.get('send_private', True)
     
     if not selected_ids or not message_text:
         await callback.answer("❌ Ошибка данных!", show_alert=True)
@@ -365,13 +765,14 @@ async def confirm_and_send(callback: CallbackQuery, state: FSMContext):
         f"📤 <b>Начинаю рассылку...</b>\n"
         f"Всего: {len(selected_ids)} студентов\n"
         f"Отправлено: 0/{len(selected_ids)}\n"
-        f"⏱️ Задержка: {DEFAULT_THROTTLING} сек",
+        f"⏱️ Задержка: {throttling_delay} сек",
         parse_mode="HTML"
     )
     
     # Получаем данные студентов из БД
     sent_count = 0
     failed_count = 0
+    updated_deadlines = 0
     
     async with AsyncSessionContext() as session:
         from bot.models import Communication
@@ -388,63 +789,121 @@ async def confirm_and_send(callback: CallbackQuery, state: FSMContext):
                 continue
             
             # Формируем персонализированное сообщение
+            first_name = student.full_name.split()[0] if student.full_name else "Студент"
             personalized_text = message_text.replace("{имя}", student.full_name or "Студент")
             
+            # Добавляем приветствие если есть {имя}
+            if "{имя}" in message_text:
+                personalized_text = f"Привет, {first_name}! 👋\n\n" + personalized_text
+            
             try:
-                # Отправляем через бота (канал 1: в чат + сохранение в БД)
-                await callback.bot.send_message(
-                    chat_id=student.telegram_id,
-                    text=personalized_text,
-                    parse_mode="HTML"
-                )
+                # Отправляем через бота (если включена отправка в чат)
+                if send_to_chat:
+                    # Отправляем текст
+                    await bot.send_message(
+                        chat_id=student.telegram_id,
+                        text=personalized_text,
+                        parse_mode="HTML"
+                    )
+                    
+                    # Отправляем файл если есть
+                    if attached_file:
+                        if attached_file['file_type'] == 'document':
+                            await bot.send_document(
+                                chat_id=student.telegram_id,
+                                document=attached_file['file_id'],
+                                caption=f"📎 Файл от преподавателя"
+                            )
+                        elif attached_file['file_type'] == 'photo':
+                            await bot.send_photo(
+                                chat_id=student.telegram_id,
+                                photo=attached_file['file_id'],
+                                caption=f"📎 Фото от преподавателя"
+                            )
+                        elif attached_file['file_type'] == 'video':
+                            await bot.send_video(
+                                chat_id=student.telegram_id,
+                                video=attached_file['file_id'],
+                                caption=f"📎 Видео от преподавателя"
+                            )
+                
+                # Личное сообщение (если включено и отличается от чата)
+                if send_private and send_to_chat:
+                    # В aiogram нет прямого способа отправить "личное сообщение" отдельно от бота
+                    # Это просто дубликат для ясности
+                    pass
                 
                 # Сохраняем в communications (для истории)
-                comm = Communication(
-                    id=uuid4(),
-                    from_user_id=None,  # Системное сообщение
-                    to_user_id=student_id,
-                    channel="telegram",
-                    message_type="text",
-                    message=personalized_text,
-                    content=personalized_text,
-                    from_student=False,
-                    from_teacher=True,
-                    is_read=False,
-                    created_at=datetime.utcnow()
-                )
-                session.add(comm)
+                if send_to_chat:
+                    comm = Communication(
+                        id=uuid4(),
+                        from_user_id=None,
+                        to_user_id=student_id,
+                        channel="telegram",
+                        message_type="text",
+                        message=personalized_text,
+                        content=personalized_text,
+                        from_student=False,
+                        from_teacher=True,
+                        is_read=False,
+                        created_at=datetime.utcnow()
+                    )
+                    session.add(comm)
                 
                 sent_count += 1
                 
+                # Обновляем дедлайн если указан
+                if new_deadline:
+                    # Находим активную работу студента
+                    result = await session.execute(
+                        select(StudentWork).where(
+                            and_(
+                                StudentWork.student_id == student_id,
+                                StudentWork.status.notin_(['accepted', 'rejected'])
+                            )
+                        ).order_by(StudentWork.created_at.desc())
+                    )
+                    active_work = result.scalar_one_or_none()
+                    
+                    if active_work:
+                        active_work.deadline = new_deadline
+                        updated_deadlines += 1
+                
                 # Обновляем прогресс каждые 5 сообщений
-                if (i + 1) % 5 == 0:
+                if (i + 1) % 5 == 0 or (i + 1) == len(selected_ids):
                     await progress_msg.edit_text(
                         f"📤 <b>Рассылка в процессе...</b>\n"
                         f"Всего: {len(selected_ids)} студентов\n"
                         f"Отправлено: {sent_count}/{len(selected_ids)}\n"
                         f"❌ Ошибок: {failed_count}\n"
-                        f"⏱️ Задержка: {DEFAULT_THROTTLING} сек",
+                        f"📅 Обновлено дедлайнов: {updated_deadlines}\n"
+                        f"⏱️ Задержка: {throttling_delay} сек",
                         parse_mode="HTML"
                     )
                 
-                # Throttling
-                await asyncio.sleep(DEFAULT_THROTTLING)
+                # Throttling - КРИТИЧЕСКИ ВАЖНО!
+                await asyncio.sleep(throttling_delay)
                 
             except Exception as e:
                 logger.error(f"Failed to send message to {student_id}: {e}")
                 failed_count += 1
         
-        # Сохраняем все communications
+        # Сохраняем все communications и обновления дедлайнов
         await session.commit()
     
     # Финальное сообщение
-    await progress_msg.edit_text(
+    final_text = (
         f"✅ <b>Рассылка завершена!</b>\n\n"
         f"📊 Отправлено: <b>{sent_count}</b>\n"
         f"❌ Ошибок: <b>{failed_count}</b>\n"
-        f"📁 Сохранено в истории переписки",
-        parse_mode="HTML"
     )
+    
+    if new_deadline:
+        final_text += f"📅 Обновлено дедлайнов: <b>{updated_deadlines}</b>\n"
+    
+    final_text += "📁 Сохранено в истории переписки"
+    
+    await progress_msg.edit_text(final_text, parse_mode="HTML")
     
     await state.clear()
     await callback.message.answer(
@@ -458,16 +917,31 @@ async def edit_message(callback: CallbackQuery, state: FSMContext):
     """Вернуться к редактированию сообщения"""
     await state.set_state(MassMessagingStates.composing_message)
     
-    text = "✏️ <b>Введите новый текст сообщения:</b>\n\n"
-    text += "<i>Используйте {'{имя}'} для подстановки имени студента</i>"
+    data = await state.get_data()
+    attached_file = data.get('attached_file')
+    new_deadline = data.get('new_deadline')
+    throttling_delay = data.get('throttling_delay', DEFAULT_THROTTLING)
     
-    await callback.message.edit_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚫 Отмена", callback_data="cancel_broadcast")]
-        ]),
-        parse_mode="HTML"
-    )
+    text = "✏️ <b>Редактирование сообщения</b>\n\n"
+    
+    if attached_file:
+        text += f"📎 Файл: <b>{attached_file['file_name']}</b>\n"
+    
+    if new_deadline:
+        text += f"📅 Дедлайн: <b>{new_deadline.strftime('%d.%m.%Y')}</b>\n"
+    
+    text += f"⏱️ Задержка: <b>{throttling_delay}</b> сек\n\n"
+    text += "<b>Введите новый текст сообщения:</b>\n"
+    text += "<i>Используйте {имя} для подстановки имени студента</i>"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📎 Прикрепить файл", callback_data="attach_file")],
+        [InlineKeyboardButton(text="📅 Указать дедлайн", callback_data="set_deadline")],
+        [InlineKeyboardButton(text="⚙️ Изменить задержку", callback_data="set_throttling")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_filters")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
 
