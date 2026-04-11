@@ -13,6 +13,7 @@ from datetime import datetime
 
 from bot.keyboards import get_main_menu, get_admin_menu
 from bot.templates.messages import Messages
+from bot.config import config
 from bot.models import AsyncSessionContext, StudentWork, File
 
 logger = logging.getLogger(__name__)
@@ -20,8 +21,6 @@ router = Router()
 
 # Store message_id -> work_id mapping for admin replies
 work_messages_map = {}
-
-ADMIN_IDS = [502621151]
 
 STATUS_INFO = {
     "draft": {"emoji": "📝", "name": "Черновик"},
@@ -98,7 +97,7 @@ async def list_all_works(message: Message):
     """Админ: показать активные работы (не архивные)"""
     telegram_id = message.from_user.id
     
-    if telegram_id not in ADMIN_IDS:
+    if telegram_id not in config.ADMIN_IDS:
         return
     
     async with AsyncSessionContext() as session:
@@ -207,7 +206,7 @@ async def show_work_details(callback_query: CallbackQuery):
         sent_msg = await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         
         # Store mapping for admin replies
-        if callback_query.from_user.id in ADMIN_IDS:
+        if callback_query.from_user.id in config.ADMIN_IDS:
             work_messages_map[sent_msg.message_id] = work_id
         
         await callback_query.answer()

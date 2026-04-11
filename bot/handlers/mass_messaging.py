@@ -17,6 +17,7 @@ from typing import Optional, List, Dict, Any
 import os
 
 from bot.keyboards import get_admin_menu, get_cancel_menu
+from bot.config import config
 from bot.models import AsyncSessionContext, User, StudentWork
 
 logger = logging.getLogger(__name__)
@@ -34,10 +35,8 @@ class MassMessagingStates(StatesGroup):
 # Хранение данных рассылки (временно, для FSM)
 # В продакшене лучше использовать Redis или базу данных
 
-ADMIN_IDS = [502621151]
-
-# Настройка throttling (в секундах) - берётся из env или 15 по умолчанию
-DEFAULT_THROTTLING = int(os.getenv("THROTTLING_DELAY", "15"))
+# Настройка throttling (в секундах) - берётся из config или 15 по умолчанию
+DEFAULT_THROTTLING = config.THROTTLING_DELAY
 
 # Типы работ для фильтрации
 WORK_TYPE_FILTERS = {
@@ -166,7 +165,7 @@ async def start_mass_messaging(message: Message, state: FSMContext):
     """Начать массовую рассылку - шаг 1: выбор студентов с фильтрами"""
     telegram_id = message.from_user.id
     
-    if telegram_id not in ADMIN_IDS:
+    if telegram_id not in config.ADMIN_IDS:
         await message.answer("❌ У вас нет доступа к этой функции.")
         return
     

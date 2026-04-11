@@ -12,11 +12,10 @@ from datetime import datetime
 from uuid import uuid4
 
 from bot.models import AsyncSessionContext, StudentWork, User, Communication
+from bot.config import config
 
 logger = logging.getLogger(__name__)
 router = Router()
-
-ADMIN_IDS = [502621151]
 
 
 class GradeStates(StatesGroup):

@@ -68,6 +68,19 @@ class StudentWork(Base):
     teacher_comment = Column(Text)
     teacher_reviewed_at = Column(DateTime)
     
+    # TICKET-3.1: Grading fields
+    grade_classic = Column(Integer)  # 1-5
+    grade_100 = Column(Integer)      # 0-100
+    grade_letter = Column(String(2))   # A, B, C, D, E
+    grade_comment = Column(Text)
+    is_archived = Column(Boolean, default=False)
+    graded_at = Column(DateTime)
+    
+    # Antiplagiarism
+    antiplag_system = Column(String(100))
+    antiplag_originality_percent = Column(Numeric(5, 2))
+    antiplag_report_url = Column(String(500))
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     submitted_at = Column(DateTime)

@@ -11,17 +11,15 @@ from datetime import datetime
 
 from bot.keyboards import get_main_menu, get_admin_menu
 from bot.templates.messages import Messages
+from bot.config import config
 
 logger = logging.getLogger(__name__)
 router = Router()
 
-# Admin IDs
-ADMIN_IDS = [502621151]
-
 
 def is_admin(user_id: int) -> bool:
     """Проверить, является ли пользователь администратором"""
-    return user_id in ADMIN_IDS
+    return user_id in config.ADMIN_IDS
 
 
 @router.message(Command("start"))

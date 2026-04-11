@@ -13,11 +13,10 @@ from uuid import uuid4
 
 from bot.keyboards import get_main_menu, get_cancel_menu
 from bot.templates.messages import Messages
+from bot.config import config
 
 logger = logging.getLogger(__name__)
 router = Router()
-
-ADMIN_IDS = [502621151]
 
 # FSM States
 class CommunicationStates(StatesGroup):
@@ -96,7 +95,7 @@ async def process_message(message: Message, state: FSMContext):
         
         # Уведомляем админов
         try:
-            for admin_id in ADMIN_IDS:
+            for admin_id in config.ADMIN_IDS:
                 await message.bot.send_message(
                     chat_id=admin_id,
                     text=f"📩 <b>Новое сообщение от студента</b>\n\n"

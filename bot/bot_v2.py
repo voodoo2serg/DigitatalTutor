@@ -46,6 +46,11 @@ async def main():
         submit_router,
         plan_router,
         communication_router,
+        ai_review_router,
+        students_router,
+        works_review_router,
+        mass_messaging_router,
+        grade_router,
     )
     
     # Register routers
@@ -55,6 +60,11 @@ async def main():
     dp.include_router(submit_router)
     dp.include_router(plan_router)
     dp.include_router(communication_router)
+    dp.include_router(ai_review_router)
+    dp.include_router(students_router)
+    dp.include_router(works_review_router)
+    dp.include_router(mass_messaging_router)
+    dp.include_router(grade_router)
     
     logger.info("Bot started successfully!")
     
