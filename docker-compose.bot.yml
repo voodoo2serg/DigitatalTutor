@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  digitatal-bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: digitatal-bot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - DATABASE_URL=${DATABASE_URL}
+      - YANDEX_DISK_TOKEN=${YANDEX_DISK_TOKEN}
+    depends_on:
+      - digitatal-postgres
+    networks:
+      - digitatal-network
+    volumes:
+      - ./bot:/app/bot:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  digitatal-network:
+    external: true

@@ -45,40 +45,40 @@ async def show_students_menu(message: Message):
     if not is_admin(telegram_id):
         await message.answer("⛔ У вас нет доступа.")
         return
-    
+
     async with AsyncSessionContext() as session:
         result = await session.execute(
             select(User).where(User.role.isnot(None)).order_by(User.full_name)
         )
         students = result.scalars().all()
-        
+
         if not students:
             await message.answer("👥 Список студентов пуст", reply_markup=get_admin_menu())
             return
-        
+
         text = "👥 <b>Список студентов</b>\n\n"
         kb = []
-        
+
         for i, student in enumerate(students, 1):
             works_result = await session.execute(
                 select(StudentWork).where(StudentWork.student_id == student.id)
             )
             works = works_result.scalars().all()
             status_emoji, _ = get_student_status_color(student, works)
-            
+
             # Находим ближайший дедлайн
             closest = None
             for w in works:
                 if w.deadline and (not closest or w.deadline < closest):
                     closest = w.deadline
-            
+
             dl_str = ""
             if closest:
                 days = (closest - datetime.utcnow()).days
                 dl_str = f" | {days}д" if days >= 0 else f" | {abs(days)}д назад"
-            
+
             text += f"{i}. {status_emoji} <b>{student.full_name or 'Без имени'}</b>{dl_str}\n"
-            
+
             # Кнопки действий для студента
             kb.append([
                 InlineKeyboardButton(
@@ -86,7 +86,7 @@ async def show_students_menu(message: Message):
                     callback_data=f"student_detail:{student.id}"
                 )
             ])
-        
+
         # Фильтры
         kb.append([
             InlineKeyboardButton(text="🔴 Критичные", callback_data="filter:critical"),
@@ -96,7 +96,7 @@ async def show_students_menu(message: Message):
             InlineKeyboardButton(text="🟢 В порядке", callback_data="filter:ok"),
             InlineKeyboardButton(text="⚪ Без работ", callback_data="filter:no_works")
         ])
-        
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
@@ -105,23 +105,23 @@ async def show_students_menu(message: Message):
 async def show_student_detail(callback: CallbackQuery):
     """Детальная карточка студента с работами и действиями"""
     student_id = callback.data.split(":")[1]
-    
+
     async with AsyncSessionContext() as session:
         result = await session.execute(
             select(User).where(User.id == student_id)
         )
         student = result.scalar_one_or_none()
-        
+
         if not student:
             await callback.answer("Студент не найден", show_alert=True)
             return
-        
+
         # Получаем работы
         works_result = await session.execute(
             select(StudentWork).where(StudentWork.student_id == student.id)
         )
         works = works_result.scalars().all()
-        
+
         # Формируем текст карточки
         text = f"""👤 <b>{student.full_name or 'Без имени'}</b>
 📱 @{student.telegram_username or 'нет'}
@@ -135,7 +135,7 @@ async def show_student_detail(callback: CallbackQuery):
 📋 <b>Артефакты:</b>
 """
         kb = []
-        
+
         if not works:
             text += "\n<i>Нет работ</i>"
         else:
@@ -153,14 +153,14 @@ async def show_student_detail(callback: CallbackQuery):
                 else:
                     icon = "🟡"
                     status = "В работе"
-                
+
                 dl_str = ""
                 if work.deadline:
                     days = (work.deadline - datetime.utcnow()).days
                     dl_str = f" | {'❗' if days < 0 else '⚠️' if days <= 3 else '📅'} {work.deadline.strftime('%d.%m')}"
-                
+
                 text += f"\n{icon} <b>{work.title or 'Без названия'}</b>\n   └ {status}{dl_str}"
-                
+
                 # Кнопка для каждой работы
                 kb.append([
                     InlineKeyboardButton(
@@ -172,10 +172,10 @@ async def show_student_detail(callback: CallbackQuery):
                         callback_data=f"download_work:{work.id}"
                     )
                 ])
-        
+
         # Действия со студентом
         text += "\n\n<b>💬 Действия:</b>"
-        
+
         kb.append([
             InlineKeyboardButton(
                 text="💬 Написать сообщение",
@@ -191,9 +191,9 @@ async def show_student_detail(callback: CallbackQuery):
         kb.append([
             InlineKeyboardButton(text="👥 К списку", callback_data="students:back")
         ])
-        
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
-        
+
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
 
@@ -202,13 +202,13 @@ async def show_student_detail(callback: CallbackQuery):
 async def message_student_prompt(callback: CallbackQuery):
     """Запросить текст сообщения для студента"""
     student_id = callback.data.split(":")[1]
-    
+
     async with AsyncSessionContext() as session:
         result = await session.execute(
             select(User).where(User.id == student_id)
         )
         student = result.scalar_one_or_none()
-        
+
         if student:
             await callback.message.answer(
                 f"💬 <b>Сообщение для {student.full_name or 'студента'}</b>\n\n"
@@ -216,7 +216,7 @@ async def message_student_prompt(callback: CallbackQuery):
                 parse_mode="HTML"
             )
             # Сохраняем ID студента в контексте (можно через FSM)
-    
+
     await callback.answer()
 
 
@@ -224,17 +224,17 @@ async def message_student_prompt(callback: CallbackQuery):
 async def show_chat_history(callback: CallbackQuery):
     """Показать историю переписки со студентом"""
     student_id = callback.data.split(":")[1]
-    
+
     async with AsyncSessionContext() as session:
         result = await session.execute(
             select(User).where(User.id == student_id)
         )
         student = result.scalar_one_or_none()
-        
+
         if not student:
             await callback.answer("Студент не найден", show_alert=True)
             return
-        
+
         # Здесь можно загрузить историю из БД если есть таблица messages
         text = f"""📨 <b>Переписка с {student.full_name or 'студентом'}</b>
 
@@ -245,7 +245,7 @@ async def show_chat_history(callback: CallbackQuery):
 Напишите сообщение для отправки:
 """
         kb = [[InlineKeyboardButton(text="👤 Назад к карточке", callback_data=f"student_detail:{student_id}")]]
-        
+
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
         await callback.answer()
 
