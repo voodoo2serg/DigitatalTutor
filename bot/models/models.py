@@ -175,6 +175,20 @@ class AIAnalysisLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class WebAuthCode(Base):
+    """Коды для веб-доступа (QR-коды, одноразовые коды)"""
+    __tablename__ = "web_auth_codes"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    code = Column(String(20), unique=True, nullable=False, index=True)
+    generated_by = Column(String(50), default='admin')  # 'admin' or 'bot'
+    expires_at = Column(DateTime, nullable=False)
+    is_used = Column(Boolean, default=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class MessageTemplate(Base):
     """Шаблоны сообщений"""
     __tablename__ = "message_templates"

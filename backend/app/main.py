@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api import users, works, files, communications, ai_analysis
+from app.api import users, works, files, communications, ai_analysis, web_auth
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -35,6 +35,8 @@ app.include_router(works.router, prefix="/api/v1/works", tags=["works"])
 app.include_router(files.router, prefix="/api/v1/files", tags=["files"])
 app.include_router(communications.router, prefix="/api/v1/communications", tags=["communications"])
 app.include_router(ai_analysis.router, prefix="/api/v1/ai", tags=["ai"])
+app.include_router(web_auth.router, prefix="/api/v1/auth", tags=["auth"])
+app.include_router(web_auth.router, prefix="/api/v1/admin", tags=["admin"])
 
 @app.get("/")
 async def root():

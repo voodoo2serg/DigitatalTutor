@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Debug
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# Prisma (not needed in web)
+prisma/
+
+# Generated
+src/generated/

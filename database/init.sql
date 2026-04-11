@@ -269,6 +269,20 @@ CREATE TABLE message_templates (
 );
 
 -- ============================================
+-- WEB AUTH CODES (Одноразовые коды для веб-доступа)
+-- ============================================
+CREATE TABLE web_auth_codes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code VARCHAR(20) UNIQUE NOT NULL,
+    generated_by VARCHAR(50) DEFAULT 'admin',
+    expires_at TIMESTAMP NOT NULL,
+    is_used BOOLEAN DEFAULT FALSE,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
 -- INDEXES
 -- ============================================
 CREATE INDEX idx_users_telegram ON users(telegram_id);
@@ -281,6 +295,8 @@ CREATE INDEX idx_milestones_work_type ON milestones(work_type_id);
 CREATE INDEX idx_ai_providers_active ON ai_providers(is_active);
 CREATE INDEX idx_ai_logs_work ON ai_analysis_logs(work_id);
 CREATE INDEX idx_templates_category ON message_templates(category);
+CREATE INDEX idx_web_auth_codes_code ON web_auth_codes(code);
+CREATE INDEX idx_web_auth_codes_user ON web_auth_codes(user_id);
 
 -- ============================================
 -- DEFAULT DATA
