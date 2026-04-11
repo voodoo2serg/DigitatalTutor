@@ -63,6 +63,9 @@ async def main():
         works_review_router,
         mass_messaging_router,
         grade_router,
+        review_router,
+        admin_settings_router,
+        settings_text_router,
     )
 
     dp.include_router(start_router)
@@ -76,9 +79,28 @@ async def main():
     dp.include_router(works_review_router)
     dp.include_router(mass_messaging_router)
     dp.include_router(grade_router)
+    dp.include_router(review_router)
+    dp.include_router(admin_settings_router)
+    dp.include_router(settings_text_router)
 
     logger.info("All routers registered successfully!")
     logger.info("Bot started successfully!")
+
+    # Initialize AI service
+    try:
+        from bot.services.ai_service import init_ai_service
+        init_ai_service()
+        logger.info("AI Service initialized")
+    except Exception as e:
+        logger.warning(f"AI Service init failed (non-critical): {e}")
+
+    # Start deadline reminder scheduler
+    try:
+        from bot.services.scheduler import start_scheduler
+        start_scheduler(bot)
+        logger.info("Deadline reminder scheduler started")
+    except Exception as e:
+        logger.warning(f"Scheduler init failed (non-critical): {e}")
 
     # Запуск polling
     try:

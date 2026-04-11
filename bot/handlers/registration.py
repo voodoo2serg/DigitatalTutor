@@ -13,7 +13,8 @@ from uuid import uuid4
 
 from bot.keyboards import get_main_menu, get_role_selection_menu, get_cancel_menu
 from bot.templates.messages import Messages
-from bot.services.yandex_service import YandexDiskService
+from bot.services.yandex_service import yandex_service
+from bot.config import config
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -193,13 +194,11 @@ async def complete_registration(message: Message, state: FSMContext):
     username = message.from_user.username
     
     try:
-        import os
-        yandex_token = os.getenv("YANDEX_DISK_TOKEN", "")
-        yandex = YandexDiskService(yandex_token)
-        folder_path = yandex.create_student_folder(
-            fio=fio,
+        # Use global yandex_service instance and correct method signature
+        folder_path = yandex_service.create_student_folder(
             role=role_code,
-            year=datetime.now().year
+            student_name=fio,
+            group_name=group
         )
         
         from bot.models import AsyncSessionContext, User

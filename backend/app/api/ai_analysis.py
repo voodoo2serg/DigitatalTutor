@@ -278,7 +278,6 @@ async def analyze_work_ai(
         work.ai_formatting_score = analysis_results["formatting"].get("score", 0)
     
     work.ai_analysis_json = analysis_results
-    work.analysis_started_at = datetime.utcnow()
     work.updated_at = datetime.utcnow()
     
     await db.commit()
@@ -359,6 +358,9 @@ async def create_template(
     user: dict = Depends(verify_token)
 ):
     """Создать шаблон сообщения"""
+    user_id = user.get("user_id")
+    created_by = UUID(user_id) if user_id and user_id not in ("anonymous", "bot") else None
+    
     new_template = MessageTemplate(
         id=uuid4(),
         name=template_data.get("name"),
@@ -368,7 +370,7 @@ async def create_template(
         body_template=template_data.get("body_template"),
         variables=template_data.get("variables", []),
         is_active=template_data.get("is_active", True),
-        created_by=UUID(user.get("user_id")) if user.get("user_id") else None,
+        created_by=created_by,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
@@ -481,7 +483,7 @@ async def send_template_message(
     
     # Prepare variables
     variables = {
-        "student_name": recipient.full_name or recipient.username,
+        "student_name": recipient.full_name or recipient.telegram_username,
         **work_data,
         **custom_vars,
     }
@@ -495,14 +497,18 @@ async def send_template_message(
         subject = subject.replace(placeholder, str(value)) if subject else subject
         body = body.replace(placeholder, str(value))
     
-    # Create communication record
+    # Get sender user_id safely
+    sender_uid = user.get("user_id")
+    from_user_id = UUID(sender_uid) if sender_uid and sender_uid not in ("anonymous", "bot") else None
+    
+    # Create communication record using correct column names
     communication = Communication(
         id=uuid4(),
         work_id=UUID(work_id) if work_id else None,
-        sender_id=UUID(user.get("user_id")) if user.get("user_id") else None,
-        recipient_id=recipient.id,
-        message=body,
-        message_type="template",
+        from_user_id=from_user_id,
+        to_user_id=UUID(recipient_id),
+        content=body,
+        message_type="system",
         is_read=False,
         created_at=datetime.utcnow(),
     )
@@ -534,7 +540,6 @@ async def bulk_send_message(
     custom_vars = data.get("variables", {})
     
     # Build recipient query
-    from sqlalchemy import select
     query = select(User).where(User.role == "student")
     
     if recipient_type == "by_status":
@@ -680,9 +685,14 @@ async def generate_student_response(
                     "full_text": ai_response
                 }
             
-            # Store in work
-            work.ai_student_response = response_data
-            work.ai_student_response_status = "pending_review"  # pending_review, approved, sent
+            # Store student_response in ai_analysis_json under "student_response" key
+            if work.ai_analysis_json is None:
+                work.ai_analysis_json = {}
+            else:
+                # Make a copy to avoid mutating the dict in place
+                work.ai_analysis_json = dict(work.ai_analysis_json)
+            work.ai_analysis_json["student_response"] = response_data
+            work.ai_analysis_json["student_response_status"] = "pending_review"
             await db.commit()
             
             return {
@@ -693,6 +703,8 @@ async def generate_student_response(
                 "status": "pending_review"
             }
             
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to generate student response: {e}")
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
@@ -712,6 +724,9 @@ async def send_student_response(
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     
+    if not work.ai_analysis_json or "student_response" not in work.ai_analysis_json:
+        raise HTTPException(status_code=400, detail="Student response not generated yet")
+    
     # Get student
     result = await db.execute(select(User).where(User.id == work.student_id))
     student = result.scalar_one_or_none()
@@ -720,14 +735,15 @@ async def send_student_response(
         raise HTTPException(status_code=400, detail="Student has no Telegram ID")
     
     # Get response text (edited or original)
-    response_text = data.get("response_text") or work.ai_student_response.get("full_text", "")
+    student_response = work.ai_analysis_json.get("student_response", {})
+    response_text = data.get("response_text") or student_response.get("full_text", "")
     
     if not response_text:
         raise HTTPException(status_code=400, detail="No response text provided")
     
-    # Store final response
-    work.ai_student_response["full_text"] = response_text
-    work.ai_student_response_status = "sent"
+    # Store final response in ai_analysis_json
+    work.ai_analysis_json["student_response"]["full_text"] = response_text
+    work.ai_analysis_json["student_response_status"] = "sent"
     work.teacher_comment = response_text  # Also store as teacher comment
     work.status = "graded"
     await db.commit()
@@ -740,5 +756,3 @@ async def send_student_response(
         "response_text": response_text,
         "status": "sent"
     }
-
-

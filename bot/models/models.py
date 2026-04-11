@@ -98,6 +98,7 @@ class File(Base):
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     work_id = Column(UUID(as_uuid=True), ForeignKey("student_works.id"), index=True)
+    milestone_submission_id = Column(UUID(as_uuid=True), ForeignKey("milestone_submissions.id"), nullable=True)
     filename = Column(String(255), nullable=False)
     original_name = Column(String(255))
     mime_type = Column(String(100))
@@ -109,6 +110,7 @@ class File(Base):
     ai_extracted_text = Column(Text)
     ai_analysis_status = Column(String(50), default='pending')
     ai_analysis_result = Column(JSONB)
+    uploaded_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     work = relationship("StudentWork", back_populates="files")
@@ -132,8 +134,59 @@ class Communication(Base):
     telegram_chat_id = Column(BigInteger)
     from_student = Column(Boolean, default=True)
     from_teacher = Column(Boolean, default=False)
+    attachment_file_id = Column(UUID(as_uuid=True), ForeignKey("files.id"), nullable=True)
     is_read = Column(Boolean, default=False)
     read_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     work = relationship("StudentWork", back_populates="communications")
+
+
+class AIProvider(Base):
+    """Настройки AI-провайдеров"""
+    __tablename__ = "ai_providers"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    provider_name = Column(String(50), unique=True, nullable=False)
+    api_key = Column(String(500), nullable=False)
+    base_url = Column(String(255))
+    default_model = Column(String(100), default="openai/gpt-4o-mini")
+    is_active = Column(Boolean, default=True)
+    rate_limit_per_minute = Column(Integer, default=60)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AIAnalysisLog(Base):
+    """История AI-анализов"""
+    __tablename__ = "ai_analysis_logs"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    work_id = Column(UUID(as_uuid=True), ForeignKey("student_works.id", ondelete="CASCADE"))
+    file_id = Column(UUID(as_uuid=True), ForeignKey("files.id", ondelete="CASCADE"))
+    provider_used = Column(String(50))
+    model_used = Column(String(100))
+    prompt_sent = Column(Text)
+    response_received = Column(Text)
+    analysis_result = Column(JSONB)
+    tokens_used = Column(Integer)
+    cost_usd = Column(Numeric(10, 6))
+    processing_time_ms = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MessageTemplate(Base):
+    """Шаблоны сообщений"""
+    __tablename__ = "message_templates"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    name = Column(String(100), nullable=False)
+    category = Column(String(50), nullable=False)
+    trigger_event = Column(String(50))
+    subject_template = Column(Text)
+    body_template = Column(Text, nullable=False)
+    variables = Column(JSONB, default=list)
+    is_active = Column(Boolean, default=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

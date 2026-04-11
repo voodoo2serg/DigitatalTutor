@@ -12,6 +12,9 @@ from .works_review import router as works_review_router
 from .students import router as students_router
 from .mass_messaging import router as mass_messaging_router
 from .grade_handler import router as grade_router
+from .works_review import review_router as review_router
+from .admin_settings import router as admin_settings_router
+from .admin_settings import settings_text_router
 
 __all__ = [
     'start_router',
@@ -25,4 +28,7 @@ __all__ = [
     'students_router',
     'mass_messaging_router',
     'grade_router',
+    'review_router',
+    'admin_settings_router',
+    'settings_text_router',
 ]

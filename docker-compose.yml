@@ -4,7 +4,7 @@ services:
   # === Backend API ===
   backend:
     build:
-      context: ./bot
+      context: ./backend
       dockerfile: Dockerfile
     container_name: digitatal-backend
     restart: always
@@ -125,6 +125,25 @@ services:
         max-size: "50m"
         max-file: "3"
 
+  # === Ollama (Local AI) ===
+  ollama:
+    image: ollama/ollama:latest
+    container_name: digitatal-ollama
+    restart: always
+    mem_limit: 4g
+    cpus: '2.0'
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - digitatal-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
   # === PostgreSQL Backup Service ===
   # Запускается каждые 6 часов через cron внутри контейнера
   backup:
@@ -214,6 +233,7 @@ volumes:
   redis_data:
   uploads:
   student_files:
+  ollama_data:
 
 networks:
   digitatal-network:

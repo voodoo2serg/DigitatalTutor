@@ -1,7 +1,8 @@
+import os
+import uuid
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-import uuid
 
 from app.core.database import get_db
 from app.api.auth import verify_token
@@ -21,7 +22,7 @@ async def upload_file(
     
     # Get work to find student
     from app.models.models import StudentWork, User
-    result = await db.execute(select(StudentWork).where(StudentWork.id == UUID(work_id)))
+    result = await db.execute(select(StudentWork).where(StudentWork.id == uuid.UUID(work_id)))
     work = result.scalar_one_or_none()
     
     if not work:
@@ -61,7 +62,7 @@ async def upload_file(
             }
         )
     # Check work exists
-    result = await db.execute(select(StudentWork).where(StudentWork.id == work_id))
+    result = await db.execute(select(StudentWork).where(StudentWork.id == uuid.UUID(work_id)))
     work = result.scalar_one_or_none()
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
@@ -78,7 +79,7 @@ async def upload_file(
     
     # Create DB record
     db_file = File(
-        work_id=work_id,
+        work_id=uuid.UUID(work_id),
         filename=unique_filename,
         original_name=file.filename,
         mime_type=file.content_type,
@@ -98,7 +99,7 @@ async def upload_file(
 
 @router.get("/work/{work_id}")
 async def list_work_files(work_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(File).where(File.work_id == work_id))
+    result = await db.execute(select(File).where(File.work_id == uuid.UUID(work_id)))
     files = result.scalars().all()
     
     return [{
@@ -118,7 +119,7 @@ async def get_file_public_url(
 ):
     """Получить публичную ссылку на файл из Яндекс.Диска"""
     # Получаем файл
-    result = await db.execute(select(File).where(File.id == UUID(file_id)))
+    result = await db.execute(select(File).where(File.id == uuid.UUID(file_id)))
     file = result.scalar_one_or_none()
     
     if not file:
@@ -145,7 +146,6 @@ async def get_file_public_url(
     
     # Если файл в minio/local — возвращаем прямую ссылку через API
     elif file.storage_type == 'minio':
-        # TODO: Реализовать получение presigned URL от MinIO
         return {
             "success": True,
             "download_url": f"/api/v1/files/{file_id}/download",
@@ -163,9 +163,8 @@ async def download_file(
 ):
     """Скачать файл"""
     from fastapi.responses import FileResponse, StreamingResponse
-    import os
     
-    result = await db.execute(select(File).where(File.id == UUID(file_id)))
+    result = await db.execute(select(File).where(File.id == uuid.UUID(file_id)))
     file = result.scalar_one_or_none()
     
     if not file:
@@ -190,5 +189,3 @@ async def download_file(
                 return RedirectResponse(url=public_url)
     
     raise HTTPException(status_code=404, detail="File not available for download")
-
-

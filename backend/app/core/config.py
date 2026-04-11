@@ -27,13 +27,22 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     TEACHER_TELEGRAM_ID: str = ""
     
-    # AI
-    OLLAMA_URL: str = "http://localhost:11434"
+    # AI Providers
+    CEREBRAS_API_KEY: str = ""
+    OPENROUTER_API_KEY: str = ""
+    OLLAMA_URL: str = "http://ollama:11434"
     OLLAMA_MODEL: str = "gemma3:4b"
+    HUGGINGFACE_API_KEY: str = ""
+    
+    # Fallback AI
     OPENAI_API_KEY: str = ""
     
     # Redis
     REDIS_URL: str = "redis://redis:6379"
+    
+    # Security
+    JWT_SECRET: str = "change-this-to-random-string"
+    BACKEND_API_KEY: str = "change-this-to-random-api-key"
     
     class Config:
         env_file = ".env"
