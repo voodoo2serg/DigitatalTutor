@@ -442,7 +442,7 @@ def init_ai_service():
     #     ai_service.register_provider(...)
 
     # Ollama (local) - ENABLED as fallback
-    ollama_url = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+    ollama_url = os.getenv("OLLAMA_HOST", "http://digitatal-ollama:11434")
     ollama_model = os.getenv("OLLAMA_MODEL", "gemma3:4b")
     ai_service.register_provider(
         name="ollama",
