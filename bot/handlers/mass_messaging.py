@@ -272,7 +272,7 @@ async def show_student_selection(message: Message, state: FSMContext, edit: bool
     back_button = [InlineKeyboardButton(text="« Назад в меню", callback_data="admin_back")]
     
     # Собираем клавиатуру
-    keyboard = student_buttons + [[back_button]]
+    keyboard = student_buttons + [back_button]
     
     if edit and message.text:
         await message.edit_text(

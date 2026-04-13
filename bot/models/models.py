@@ -128,6 +128,7 @@ class Communication(Base):
     channel = Column(String(20), default='telegram')
     message_type = Column(String(20), default='text')
     content = Column(Text)
+    message = Column(Text)
     content_transcription = Column(Text)
     telegram_message_id = Column(BigInteger)
     telegram_chat_id = Column(BigInteger)
