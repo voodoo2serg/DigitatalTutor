@@ -329,22 +329,8 @@ async def _generate_and_send_review(callback: CallbackQuery, work_id_str: str, r
             
             await callback.message.edit_text(review_message, reply_markup=keyboard, parse_mode="HTML")
             
-            # Notify student
-            if student and student.telegram_id:
-                try:
-                    await callback.bot.send_message(
-                        chat_id=student.telegram_id,
-                        text=(
-                            f"✍️ <b>Новая рецензия на вашу работу</b>\n\n"
-                            f"📝 {work.title}\n\n"
-                            f"{review_text[:500]}"
-                            f"{'...' if len(review_text) > 500 else ''}\n\n"
-                            f"Подробности в разделе «📋 Мои работы»"
-                        ),
-                        parse_mode="HTML"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to notify student: {e}")
+            # Рецензия НЕ отправляется студенту автоматически
+            # Только преподаватель видит полную рецензию
     
     except Exception as e:
         logger.error(f"AI review generation failed: {e}", exc_info=True)
