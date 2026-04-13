@@ -222,69 +222,57 @@ async def start_mass_messaging(message: Message, state: FSMContext):
 
 
 async def show_student_selection(message: Message, state: FSMContext, edit: bool = False):
-    """Показать список студентов для выбора"""
+    """Показать список студентов для связи"""
     data = await state.get_data()
     students_data = data.get('students_data', [])
-    works_data = data.get('works_data', {})
-    selected = data.get('selected_students', [])
-    filter_type = data.get('filter_type', 'all')
-    send_to_chat = data.get('send_to_chat', True)
-    send_private = data.get('send_private', True)
     
-    # Фильтруем студентов
-    filtered_students = filter_students_by_work_type(students_data, works_data, filter_type)
+    if not students_data:
+        text = "<b>Нет зарегистрированных студентов</b>"
+        keyboard = [[InlineKeyboardButton(text="« Назад", callback_data="admin_back")]]
+        if edit and message.text:
+            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+        else:
+            await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+        return
     
     # Формируем сообщение
-    text = "📤 <b>Массовая рассылка</b>\n\n"
-    text += f"<b>Шаг 1:</b> Выберите студентов\n"
-    text += f"Выбрано: {len(selected)} из {len(filtered_students)}\n\n"
+    text = "<b>Список студентов</b>\n\n"
+    text += "Выберите действие рядом с именем студента:\n"
+    text += "💬 — начать диалог в боте\n"
+    text += "✉️ — открыть в Telegram\n\n"
     
-    # Кнопки фильтров
-    filter_buttons = []
-    for key, label in WORK_TYPE_FILTERS.items():
-        if key == filter_type:
-            label = f"✓ {label}"
-        filter_buttons.append(InlineKeyboardButton(
-            text=label,
-            callback_data=f"filter_type:{key}"
-        ))
-    
-    # Разбиваем фильтры по 3 в строку
-    filter_rows = [filter_buttons[i:i+3] for i in range(0, len(filter_buttons), 3)]
-    
-    # Кнопки для выбора студентов (по 1 в строке для удобства)
+    # Кнопки для каждого студента (две кнопки рядом с именем)
     student_buttons = []
-    for student in filtered_students[:20]:  # Показываем первые 20
-        emoji = "☑️" if student['id'] in selected else "☐"
-        student_buttons.append([InlineKeyboardButton(
-            text=f"{student['color']} {emoji} {student['name']} — {student['work_status']}",
-            callback_data=f"toggle_student:{student['id']}"
-        )])
-    
-    # Кнопки управления
-    control_buttons = [
-        [
-            InlineKeyboardButton(text="✅ Выбрать все", callback_data="select_all"),
-            InlineKeyboardButton(text="❌ Снять все", callback_data="deselect_all")
+    for student in students_data[:30]:  # Показываем первые 30
+        name = student.get('name', 'Без имени')
+        telegram_id = student.get('telegram_id', '')
+        student_id = student.get('id', '')
+        
+        # Одна строка с именем и двумя кнопками действий
+        # Используем короткие callback_data
+        row = [
+            InlineKeyboardButton(
+                text=f"{name}",
+                callback_data=f"student_info:{student_id}"
+            ),
+            InlineKeyboardButton(
+                text="💬",
+                callback_data=f"chat_bot:{student_id}"
+            ),
         ]
-    ]
+        # Добавляем кнопку открытия в Telegram только если есть telegram_id
+        if telegram_id:
+            row.append(InlineKeyboardButton(
+                text="✉️",
+                url=f"tg://user?id={telegram_id}"
+            ))
+        student_buttons.append(row)
     
-    # Галочки отправки
-    chat_emoji = "☑️" if send_to_chat else "☐"
-    private_emoji = "☑️" if send_private else "☐"
-    send_options = [
-        InlineKeyboardButton(text=f"{chat_emoji} В чат (бот)", callback_data="toggle_send_chat"),
-        InlineKeyboardButton(text=f"{private_emoji} Личное сообщение", callback_data="toggle_send_private")
-    ]
-    
-    next_button = [InlineKeyboardButton(
-        text=f"➡️ Далее: Составить сообщение ({len(selected)})", 
-        callback_data="go_to_message"
-    )]
-    cancel_button = [InlineKeyboardButton(text="🚫 Отмена", callback_data="cancel_broadcast")]
+    # Кнопка назад
+    back_button = [InlineKeyboardButton(text="« Назад в меню", callback_data="admin_back")]
     
     # Собираем клавиатуру
-    keyboard = filter_rows + student_buttons + control_buttons + [send_options] + [next_button] + [cancel_button]
+    keyboard = student_buttons + [[back_button]]
     
     if edit and message.text:
         await message.edit_text(
@@ -953,4 +941,65 @@ async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
         "Главное меню администратора:",
         reply_markup=get_admin_menu()
     )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("chat_bot:"))
+async def start_chat_with_student(callback: CallbackQuery, state: FSMContext):
+    """Начать диалог со студентом в боте"""
+    student_id = callback.data.split(":")[1]
+    
+    # Get student data from state
+    data = await state.get_data()
+    students_data = data.get('students_data', [])
+    
+    # Find student by ID
+    student = None
+    for s in students_data:
+        if str(s.get('id')) == student_id:
+            student = s
+            break
+    
+    if not student:
+        await callback.answer("Студент не найден", show_alert=True)
+        return
+    
+    student_name = student.get('name', 'Студент')
+    student_tg_id = student.get('telegram_id', '')
+    
+    # Store current student for communication
+    await state.update_data(
+        communication_student_id=student_id,
+        communication_student_name=student_name,
+        communication_student_tg_id=student_tg_id
+    )
+    
+    # Start communication state
+    from bot.handlers.communication import CommunicationStates
+    await state.set_state(CommunicationStates.waiting_for_message)
+    await state.update_data(
+        recipient_id=student_tg_id,
+        recipient_name=student_name,
+        recipient_role="student"
+    )
+    
+    text = f"""<b>Диалог с {student_name}</b>
+
+Введите ваше сообщение:
+<i>Оно будет отправлено студенту в этом боте.</i>
+
+Для отмены нажмите «Назад»"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="« Назад к списку", callback_data="back_to_students")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer(f"Начат диалог с {student_name}")
+
+
+@router.callback_query(F.data == "back_to_students")
+async def back_to_students(callback: CallbackQuery, state: FSMContext):
+    """Вернуться к списку студентов"""
+    await state.set_state(MassMessagingStates.selecting_students)
+    await show_student_selection(callback.message, state, edit=True)
     await callback.answer()

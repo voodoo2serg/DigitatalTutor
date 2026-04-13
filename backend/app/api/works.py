@@ -68,6 +68,30 @@ async def list_works(
     ]
 
 
+@router.get("/types")
+async def get_work_types(
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(verify_token)
+):
+    """Получить список типов работ"""
+    result = await db.execute(select(WorkType))
+    types = result.scalars().all()
+    return [
+        {
+            "id": str(t.id),
+            "code": t.code,
+            "name": t.name,
+            "description": t.description,
+            "gost_requirements": t.gost_requirements,
+            "max_volume_pages": t.max_volume_pages,
+            "min_volume_pages": t.min_volume_pages,
+            "deadline_days": t.deadline_days,
+            "requires_ai_check": t.requires_ai_check,
+        }
+        for t in types
+    ]
+
+
 @router.get("/{work_id}")
 async def get_work(
     work_id: str,
@@ -75,7 +99,13 @@ async def get_work(
     user: dict = Depends(verify_token)
 ):
     """Получить детали работы"""
-    result = await db.execute(select(StudentWork).where(StudentWork.id == UUID(work_id)))
+    # FIX: Validate UUID format to avoid 500 error on invalid input
+    try:
+        work_uuid = UUID(work_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Work not found")
+    
+    result = await db.execute(select(StudentWork).where(StudentWork.id == work_uuid))
     work = result.scalar_one_or_none()
     
     if not work:
@@ -312,15 +342,18 @@ async def create_work(
         try:
             work_type_id = UUID(work_data["work_type_id"])
         except:
-            work_type_id = UUID("d3e57c9e-ea11-44d0-bfd6-97b1b04a1482")  # Default: Другое
+            work_type_id = UUID("c289ceca-8129-4cb7-b93d-5887dcb9fa0b")  # Default: Другое
     else:
-        work_type_id = UUID("d3e57c9e-ea11-44d0-bfd6-97b1b04a1482")  # Default: Другое
+        work_type_id = UUID("c289ceca-8129-4cb7-b93d-5887dcb9fa0b")  # Default: Другое
     
     # Parse deadline if provided
     deadline = None
     if work_data.get("deadline"):
         try:
             deadline = datetime.fromisoformat(work_data["deadline"].replace('Z', '+00:00'))
+            # FIX: Remove timezone info for PostgreSQL TIMESTAMP WITHOUT TIME ZONE
+            if deadline.tzinfo:
+                deadline = deadline.replace(tzinfo=None)
         except:
             pass
     

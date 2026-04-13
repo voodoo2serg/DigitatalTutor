@@ -14,7 +14,7 @@ _scheduler = None
 
 async def check_deadlines_and_remind(bot):
     """Check upcoming deadlines and send reminders to students"""
-    from bot.models import AsyncSessionContext, StudentWork, User, Deadline
+    from bot.models import AsyncSessionContext, StudentWork, User  # Deadline removed
     
     now = datetime.utcnow()
     

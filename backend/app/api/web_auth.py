@@ -72,11 +72,14 @@ async def student_web_login(request: WebLoginRequest):
 
     async with AsyncSessionLocal() as session:
         # Look up the code
+        # FIX: Use naive datetime for comparison
+        from datetime import datetime as dt
+        now_naive = dt.utcnow()
         stmt = select(WebAuthCode).where(
             and_(
                 WebAuthCode.code == code,
                 WebAuthCode.is_used == False,
-                WebAuthCode.expires_at > datetime.now(timezone.utc),
+                WebAuthCode.expires_at > now_naive,
             )
         )
         result = await session.execute(stmt)
@@ -87,7 +90,8 @@ async def student_web_login(request: WebLoginRequest):
 
         # Mark code as used
         auth_code.is_used = True
-        auth_code.used_at = datetime.now(timezone.utc)
+        # FIX: Use naive datetime for PostgreSQL
+        auth_code.used_at = datetime.utcnow()
         await session.commit()
 
         # Get user
@@ -172,12 +176,14 @@ async def generate_access_code(request: GenerateCodeRequest):
         # Create auth code record
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=WEB_SESSION_DURATION)
 
+        # FIX: Remove timezone for PostgreSQL
+        expires_at_naive = expires_at.replace(tzinfo=None) if expires_at.tzinfo else expires_at
         auth_code = WebAuthCode(
             id=uuid4(),
             user_id=user.id,
             code=code,
             generated_by="admin",
-            expires_at=expires_at,
+            expires_at=expires_at_naive,
             is_used=False,
         )
         session.add(auth_code)
@@ -212,12 +218,14 @@ async def bot_generate_code(telegram_id: int):
         code = f"DT-{secrets.token_hex(4).upper()}"
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=WEB_SESSION_DURATION)
 
+        # FIX: Remove timezone for PostgreSQL
+        expires_at_naive = expires_at.replace(tzinfo=None) if expires_at.tzinfo else expires_at
         auth_code = WebAuthCode(
             id=uuid4(),
             user_id=user.id,
             code=code,
             generated_by="bot",
-            expires_at=expires_at,
+            expires_at=expires_at_naive,
             is_used=False,
         )
         session.add(auth_code)

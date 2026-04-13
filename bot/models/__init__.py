@@ -1,2 +1,2 @@
 from bot.services.db import Base, AsyncSessionContext
-from .models import User, WorkType, StudentWork, File, Communication, AIProvider, AIAnalysisLog, MessageTemplate, WebAuthCode
+from .models import User, WorkType, StudentWork, File, Communication, AIProvider, AIAnalysisLog, MessageTemplate, WebAuthCode, Milestone, MilestoneSubmission

@@ -26,6 +26,9 @@ class Config:
     # Admin IDs
     ADMIN_IDS: List[int] = None
     
+    # Throttling
+    THROTTLING_DELAY: int = int(os.getenv("THROTTLING_DELAY", "15"))
+    
     def __post_init__(self):
         if self.ADMIN_IDS is None:
             self.ADMIN_IDS = [502621151]  # @voodoo_cap

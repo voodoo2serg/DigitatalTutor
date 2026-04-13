@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import ErrorEvent
 
 from bot.config import config
 
@@ -34,6 +35,15 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+async def error_handler(event: ErrorEvent):
+    """Обработчик ошибок в хендлерах"""
+    logger.error(f"Exception in handler: {event.exception}", exc_info=True)
+    if event.update.message:
+        await event.update.message.answer(
+            "❌ Произошла ошибка при обработке команды. Попробуйте позже."
+        )
 
 
 async def main():
@@ -49,6 +59,9 @@ async def main():
     bot = Bot(token=config.TELEGRAM_BOT_TOKEN, parse_mode=ParseMode.HTML)
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
+    
+    # Регистрация обработчика ошибок
+    dp.errors.register(error_handler)
 
     # Импорт и регистрация роутеров
     from bot.handlers import (

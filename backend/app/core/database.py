@@ -18,6 +18,9 @@ async_session = async_sessionmaker(
     expire_on_commit=False
 )
 
+# AsyncSessionLocal для совместимости с web_auth.py
+AsyncSessionLocal = async_session
+
 async def get_db():
     async with async_session() as session:
         try:

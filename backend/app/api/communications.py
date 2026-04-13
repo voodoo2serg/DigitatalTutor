@@ -21,7 +21,7 @@ async def get_work_communications(work_id: str, db: AsyncSession = Depends(get_d
         "id": str(c.id),
         "content": c.content,
         "content_transcription": c.content_transcription,
-        "message_type": c.message_type,
+        "message_type": c.content_type,
         "channel": c.channel,
         "is_read": c.is_read,
         "created_at": c.created_at

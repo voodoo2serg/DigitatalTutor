@@ -4,10 +4,13 @@ DigitalTutor Bot - Database Service
 
 FIX: DT-REPAIR-001 - SQLAlchemy MissingGreenlet
 Используем @asynccontextmanager для правильной работы с async сессиями
+
+FIX: 2026-04-12 - Увеличен пул соединений для предотвращения QueuePool limit
 """
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.pool import NullPool
 import os
 
 # Получаем URL базы данных
@@ -18,7 +21,12 @@ if "postgresql://" in database_url and "asyncpg" not in database_url:
 engine = create_async_engine(
     database_url,
     echo=False,
-    future=True
+    future=True,
+    pool_size=20,           # Увеличено с 5 до 20
+    max_overflow=30,        # Увеличено с 10 до 30
+    pool_timeout=60,        # Таймаут ожидания соединения
+    pool_recycle=3600,      # Пересоздание соединений каждый час
+    pool_pre_ping=True      # Проверка соединения перед использованием
 )
 
 AsyncSessionLocal = async_sessionmaker(

@@ -27,7 +27,7 @@ class RegistrationStates(StatesGroup):
     waiting_role = State()
 
 
-async def start_registration(message: Message):
+async def start_registration(message: Message, state: FSMContext):
     """Начать процесс регистрации"""
     from bot.models import AsyncSessionContext, User
     
@@ -56,6 +56,8 @@ async def start_registration(message: Message):
         reply_markup=get_cancel_menu(),
         parse_mode="HTML"
     )
+    # FIX: Set FSM state so process_fio handler can catch input
+    await state.set_state(RegistrationStates.waiting_fio)
 
 
 @router.message(F.text == "❌ Отмена")
@@ -80,20 +82,8 @@ async def process_fio(message: Message, state: FSMContext):
         )
         return
 
-    # Проверка на дубликаты по ФИО
-    async with AsyncSessionContext() as session:
-        surname = fio.split()[0].lower()
-        result = await session.execute(
-            select(User).where(func.lower(User.full_name).like(f"%{surname}%"))
-        )
-        similar = result.scalars().all()
-        if similar:
-            await message.answer(
-                f"⚠️ В системе есть похожие имена: {', '.join([u.full_name for u in similar[:3]])}",
-                reply_markup=get_yes_no_menu()
-            )
-            return
-    
+    # FIX: Removed duplicate check to prevent bot hanging
+    # The yes/no menu had no handler, causing users to get stuck
     await state.update_data(fio=fio)
     await state.set_state(RegistrationStates.waiting_group)
     

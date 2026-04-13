@@ -398,7 +398,7 @@ def init_ai_service():
     """Initialize AI service with providers from environment"""
     import os
 
-    # Cerebras (primary - fastest)
+    # Cerebras (primary - fastest) - ENABLED for teacher review only
     cerebras_key = os.getenv("CEREBRAS_API_KEY", "")
     if cerebras_key:
         ai_service.register_provider(
@@ -409,42 +409,20 @@ def init_ai_service():
             is_active=True,
         )
 
-    # OpenRouter (fallback)
-    openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
-    if openrouter_key:
-        ai_service.register_provider(
-            name="openrouter",
-            api_key=openrouter_key,
-            base_url="https://openrouter.ai/api",
-            default_model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
-            is_active=True,
-        )
+    # OpenRouter (fallback) - DISABLED
+    # openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
+    # if openrouter_key:
+    #     ai_service.register_provider(...)
 
-    # Ollama (local)
-    ollama_url = os.getenv("OLLAMA_HOST", "http://ollama:11434")
-    ollama_model = os.getenv("OLLAMA_MODEL", "gemma3:4b")
-    # Ollama doesn't need an API key, use placeholder
-    ai_service.register_provider(
-        name="ollama",
-        api_key="local",  # Placeholder for local inference
-        base_url=ollama_url,
-        default_model=ollama_model,
-        is_active=True,
-    )
+    # Ollama (local) - DISABLED
+    # ollama_url = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+    # ollama_model = os.getenv("OLLAMA_MODEL", "gemma3:4b")
+    # ai_service.register_provider(...)
 
-    # HuggingFace
-    hf_key = os.getenv("HUGGINGFACE_API_KEY", "")
-    if hf_key:
-        ai_service.register_provider(
-            name="huggingface",
-            api_key=hf_key,
-            base_url=os.getenv(
-                "HUGGINGFACE_URL",
-                "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct"
-            ),
-            default_model="meta-llama/Meta-Llama-3-8B-Instruct",
-            is_active=True,
-        )
+    # HuggingFace - DISABLED
+    # hf_key = os.getenv("HUGGINGFACE_API_KEY", "")
+    # if hf_key:
+    #     ai_service.register_provider(...)
 
     active = ai_service.get_active_providers()
     logger.info(f"AI Service initialized. Active providers: {active}")

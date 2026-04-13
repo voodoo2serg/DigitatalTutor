@@ -23,6 +23,7 @@ services:
       - student_files:/app/data/student_files
       - uploads:/app/uploads
       - ./logs/backend:/var/log/backend
+      - ./bot:/app/bot:ro
     networks:
       - digitatal-network
     healthcheck:
@@ -182,7 +183,7 @@ services:
     mem_limit: 512m
     cpus: '0.5'
     ports:
-      - "8081:8080"
+      - "8087:8080"
     environment:
       NC_DB: "pg://postgres:5432?u=${POSTGRES_USER:-teacher}&p=${POSTGRES_PASSWORD:-changeme}&d=${POSTGRES_DB:-teaching}"
       NC_AUTH_JWT_SECRET: ${NOCODB_JWT_SECRET:-changeme}

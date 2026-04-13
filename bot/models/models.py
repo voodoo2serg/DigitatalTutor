@@ -127,7 +127,6 @@ class Communication(Base):
     to_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     channel = Column(String(20), default='telegram')
     message_type = Column(String(20), default='text')
-    message = Column(Text)
     content = Column(Text)
     content_transcription = Column(Text)
     telegram_message_id = Column(BigInteger)
@@ -204,3 +203,31 @@ class MessageTemplate(Base):
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class Milestone(Base):
+    """Этап работы (deadline milestone)"""
+    __tablename__ = "milestones"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    work_type_id = Column(UUID(as_uuid=True), ForeignKey("work_types.id", ondelete="CASCADE"))
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    order_number = Column(Integer, nullable=False)
+    weight_percent = Column(Integer, default=0)
+    deadline_offset_days = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class MilestoneSubmission(Base):
+    """Сдача этапа работы"""
+    __tablename__ = "milestone_submissions"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    work_id = Column(UUID(as_uuid=True), ForeignKey("student_works.id", ondelete="CASCADE"))
+    milestone_id = Column(UUID(as_uuid=True), ForeignKey("milestones.id"))
+    status = Column(String(50), default="pending")  # pending, submitted, approved, revision_required
+    student_comment = Column(Text)
+    teacher_feedback = Column(Text)
+    submitted_files = Column(JSONB)
+    reviewed_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+

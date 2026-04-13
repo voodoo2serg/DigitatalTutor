@@ -5,6 +5,7 @@ DigitalTutor Bot - Works Review Handler
 import logging
 import uuid
 from aiogram import Router, F
+from aiogram.filters.state import StateFilter
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, update
@@ -73,7 +74,7 @@ async def cancel_review(message: Message, state: FSMContext):
 review_router = Router()
 
 
-@review_router.message(F.text, state="waiting_review_text")
+@review_router.message(F.text, StateFilter("waiting_review_text"))
 async def save_review(message: Message, state: FSMContext):
     """Сохранить рецензию"""
     review_text = message.text.strip()

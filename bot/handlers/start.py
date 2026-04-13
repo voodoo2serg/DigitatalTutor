@@ -5,6 +5,7 @@ DigitalTutor Bot - Start Handler
 import logging
 from aiogram import Router, F
 from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from sqlalchemy import select
 from datetime import datetime
@@ -23,7 +24,7 @@ def is_admin(user_id: int) -> bool:
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
     """Обработчик команды /start"""
     from bot.models import AsyncSessionContext, User
     
@@ -50,7 +51,7 @@ async def cmd_start(message: Message):
             )
         else:
             from .registration import start_registration
-            await start_registration(message)
+            await start_registration(message, state)
 
 
 @router.message(F.text == "🔙 Студенческое меню")

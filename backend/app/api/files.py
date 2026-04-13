@@ -1,4 +1,5 @@
 import os
+import uuid as uuid_module
 import uuid
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -99,7 +100,11 @@ async def upload_file(
 
 @router.get("/work/{work_id}")
 async def list_work_files(work_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(File).where(File.work_id == uuid.UUID(work_id)))
+    try:
+        work_uuid = uuid_module.UUID(work_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid work_id format")
+    result = await db.execute(select(File).where(File.work_id == work_uuid))
     files = result.scalars().all()
     
     return [{
