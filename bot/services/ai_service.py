@@ -441,10 +441,16 @@ def init_ai_service():
     # if openrouter_key:
     #     ai_service.register_provider(...)
 
-    # Ollama (local) - DISABLED
-    # ollama_url = os.getenv("OLLAMA_HOST", "http://ollama:11434")
-    # ollama_model = os.getenv("OLLAMA_MODEL", "gemma3:4b")
-    # ai_service.register_provider(...)
+    # Ollama (local) - ENABLED as fallback
+    ollama_url = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+    ollama_model = os.getenv("OLLAMA_MODEL", "gemma3:4b")
+    ai_service.register_provider(
+        name="ollama",
+        api_key="ollama",  # Ollama doesn't need API key
+        base_url=ollama_url,
+        default_model=ollama_model,
+        is_active=True,
+    )
 
     # HuggingFace - DISABLED
     # hf_key = os.getenv("HUGGINGFACE_API_KEY", "")
