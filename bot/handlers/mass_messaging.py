@@ -5,6 +5,7 @@ DigitalTutor Bot - Mass Messaging Handler
 import logging
 import asyncio
 from aiogram import Router, F, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, 
     FSInputFile, ReplyKeyboardRemove
@@ -174,6 +175,25 @@ async def start_mass_messaging(message: Message, state: FSMContext):
         await message.answer("❌ У вас нет доступа к этой функции.")
         return
     
+    await _run_mass_messaging(message, state)
+
+
+@router.callback_query(F.data == "start_mass_messaging")
+async def start_mass_messaging_callback(callback: CallbackQuery, state: FSMContext):
+    """Начать массовую рассылку из inline кнопки"""
+    telegram_id = callback.from_user.id
+    
+    if telegram_id not in config.ADMIN_IDS:
+        await callback.answer("❌ У вас нет доступа к этой функции.", show_alert=True)
+        return
+    
+    await callback.answer()
+    await _run_mass_messaging(callback.message, state)
+
+
+async def _run_mass_messaging(message: Message, state: FSMContext):
+    """Основная логика массовой рассылки"""
+    
     async with AsyncSessionContext() as session:
         # Получаем всех студентов (role = 'student' или 'aspirant')
         result = await session.execute(
@@ -279,18 +299,41 @@ async def show_student_selection(message: Message, state: FSMContext, edit: bool
     # Собираем клавиатуру
     keyboard = student_buttons + [back_button]
     
-    if edit and message.text:
-        await message.edit_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
-            parse_mode="HTML"
-        )
-    else:
-        await message.answer(
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
-            parse_mode="HTML"
-        )
+    try:
+        if edit and message.text:
+            await message.edit_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+                parse_mode="HTML"
+            )
+    except TelegramBadRequest as e:
+        if "BUTTON_USER_INVALID" in str(e):
+            # Убираем кнопки Telegram URL и пробуем снова
+            safe_keyboard = []
+            for row in keyboard:
+                safe_row = [btn for btn in row if not (hasattr(btn, "url") and btn.url and btn.url.startswith("tg://"))]
+                if safe_row:
+                    safe_keyboard.append(safe_row)
+            if edit and message.text:
+                await message.edit_text(
+                    text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=safe_keyboard),
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=safe_keyboard),
+                    parse_mode="HTML"
+                )
+        else:
+            raise
 
 
 @router.callback_query(F.data.startswith("filter_type:"))
