@@ -5,6 +5,7 @@ DigitalTutor Bot - Student Chat Handler
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select, desc, or_
@@ -114,7 +115,18 @@ async def view_student_chat(callback: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="« Назад к списку", callback_data="back_to_students")]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        except TelegramBadRequest as e:
+            if "BUTTON_USER_INVALID" in str(e):
+                safe = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="💬 Ответить", callback_data=f"reply_to:{student_id}")],
+                    [InlineKeyboardButton(text="📤 Массовая рассылка", callback_data="start_mass_messaging")],
+                    [InlineKeyboardButton(text="« Назад к списку", callback_data="back_to_students")]
+                ])
+                await callback.message.edit_text(text, reply_markup=safe, parse_mode="HTML")
+            else:
+                raise
         await callback.answer()
 
 
