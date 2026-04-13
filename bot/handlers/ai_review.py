@@ -5,7 +5,7 @@ AI-рецензирование работ с мультипровайдерно
 import logging
 import uuid
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select, update
 
 from bot.config import config
@@ -174,7 +174,6 @@ async def start_ai_review(callback: CallbackQuery):
                 for rec in all_recommendations[:5]:
                     text += f"\n• {rec}"
 
-            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
