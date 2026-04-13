@@ -18,7 +18,7 @@ import os
 
 from bot.keyboards import get_admin_menu, get_cancel_menu
 from bot.config import config
-from bot.models import AsyncSessionContext, User, StudentWork
+from bot.models import AsyncSessionContext, User, StudentWork, WebAuthCode
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -31,6 +31,11 @@ class MassMessagingStates(StatesGroup):
     setting_deadline = State()
     confirming_send = State()
     waiting_for_file = State()
+
+# FSM States для генерации ключей веб-доступа
+class WebAuthStates(StatesGroup):
+    selecting_student_for_auth = State()
+    confirming_key_generation = State()
 
 # Хранение данных рассылки (временно, для FSM)
 # В продакшене лучше использовать Redis или базу данных
@@ -975,7 +980,7 @@ async def start_chat_with_student(callback: CallbackQuery, state: FSMContext):
     
     # Start communication state
     from bot.handlers.communication import CommunicationStates
-    await state.set_state(CommunicationStates.waiting_for_message)
+    await state.set_state(CommunicationStates.waiting_message)
     await state.update_data(
         recipient_id=student_tg_id,
         recipient_name=student_name,
@@ -1002,4 +1007,178 @@ async def back_to_students(callback: CallbackQuery, state: FSMContext):
     """Вернуться к списку студентов"""
     await state.set_state(MassMessagingStates.selecting_students)
     await show_student_selection(callback.message, state, edit=True)
+    await callback.answer()
+
+
+# ========== WEB AUTH KEY GENERATION ==========
+
+@router.message(F.text == "🔑 Ключи веб-доступа")
+async def start_web_auth_key_generation(message: Message, state: FSMContext):
+    """Начать генерацию ключа веб-доступа для студента"""
+    telegram_id = message.from_user.id
+    
+    if telegram_id not in config.ADMIN_IDS:
+        await message.answer("❌ У вас нет доступа к этой функции.")
+        return
+    
+    async with AsyncSessionContext() as session:
+        # Получаем всех студентов
+        result = await session.execute(
+            select(User).where(
+                User.role.in_(['student', 'aspirant'])
+            ).order_by(User.full_name)
+        )
+        students = result.scalars().all()
+        
+        if not students:
+            await message.answer("❌ Нет зарегистрированных студентов.")
+            return
+        
+        # Формируем список студентов
+        text = "<b>🔑 Генерация ключа веб-доступа</b>\n\n"
+        text += "Выберите студента для генерации ключа:\n\n"
+        
+        keyboard = []
+        for student in students[:20]:  # Показываем первые 20
+            name = student.full_name or f"User_{student.telegram_id}"
+            keyboard.append([
+                InlineKeyboardButton(
+                    text=f"{name}",
+                    callback_data=f"generate_key:{student.id}:{student.telegram_id}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton(text="« Назад", callback_data="admin_back")])
+        
+        await state.set_state(WebAuthStates.selecting_student_for_auth)
+        await message.answer(
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+            parse_mode="HTML"
+        )
+
+
+@router.callback_query(F.data.startswith("generate_key:"))
+async def generate_web_auth_key(callback: CallbackQuery, state: FSMContext):
+    """Сгенерировать ключ веб-доступа для студента"""
+    parts = callback.data.split(":")
+    student_id = parts[1]
+    student_tg_id = parts[2] if len(parts) > 2 else None
+    
+    from datetime import timedelta
+    import secrets
+    
+    async with AsyncSessionContext() as session:
+        # Получаем данные студента
+        result = await session.execute(
+            select(User).where(User.id == student_id)
+        )
+        student = result.scalar_one_or_none()
+        
+        if not student:
+            await callback.answer("Студент не найден", show_alert=True)
+            return
+        
+        # Генерируем ключ
+        auth_code = secrets.token_urlsafe(8)[:12].upper()
+        
+        # Устанавливаем срок действия (7 дней)
+        expires_at = datetime.utcnow() + timedelta(days=7)
+        
+        # Создаем запись в БД
+        from uuid import uuid4
+        web_auth = WebAuthCode(
+            id=uuid4(),
+            user_id=student_id,
+            code=auth_code,
+            generated_by='admin',
+            expires_at=expires_at,
+            is_used=False
+        )
+        session.add(web_auth)
+        await session.commit()
+        
+        # Формируем ссылки
+        web_url = "https://familypaper.online"  # Или из конфига
+        auth_url = f"{web_url}/auth?code={auth_code}"
+        
+        # Отправляем админу
+        text = f"""<b>✅ Ключ веб-доступа сгенерирован!</b>
+
+👤 Студент: <b>{student.full_name}</b>
+📧 Email: {student.email or 'не указан'}
+
+🔑 <b>Код доступа:</b> <code>{auth_code}</code>
+⏰ Срок действия: до {expires_at.strftime('%d.%m.%Y %H:%M')}
+
+🔗 <b>Прямая ссылка:</b>
+<code>{auth_url}</code>
+
+<b>Как использовать:</b>
+1. Отправьте код студенту
+2. Студент переходит по ссылке или вводит код на сайте
+3. Код действует 7 дней
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📤 Отправить студенту", callback_data=f"send_key:{student.telegram_id}:{auth_code}")],
+            [InlineKeyboardButton(text="🔄 Сгенерировать новый", callback_data=f"generate_key:{student_id}:{student_tg_id}")],
+            [InlineKeyboardButton(text="« К списку студентов", callback_data="back_to_web_auth")],
+            [InlineKeyboardButton(text="« В админ-меню", callback_data="admin_back")]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer("Ключ сгенерирован!")
+
+
+@router.callback_query(F.data.startswith("send_key:"))
+async def send_key_to_student(callback: CallbackQuery, state: FSMContext):
+    """Отправить ключ студенту в Telegram"""
+    parts = callback.data.split(":")
+    student_tg_id = int(parts[1])
+    auth_code = parts[2]
+    
+    web_url = "https://familypaper.online"
+    auth_url = f"{web_url}/auth?code={auth_code}"
+    
+    try:
+        # Отправляем студенту
+        await callback.bot.send_message(
+            chat_id=student_tg_id,
+            text=f"""<b>🔑 Вам предоставлен доступ к веб-порталу!</b>
+
+🔑 <b>Ваш код доступа:</b> <code>{auth_code}</code>
+
+🔗 <b>Перейдите по ссылке:</b>
+{auth_url}
+
+⏰ Код действует 7 дней.
+
+После входа вы сможете:
+• Просматривать свои работы
+• Сдавать новые работы
+• Общаться с руководителем
+• Отслеживать дедлайны
+""",
+            parse_mode="HTML"
+        )
+        
+        await callback.answer("✅ Ключ отправлен студенту!")
+        await callback.message.answer("✅ Ключ успешно отправлен студенту в личные сообщения!")
+        
+    except Exception as e:
+        logger.error(f"Failed to send key to student: {e}")
+        await callback.answer("❌ Не удалось отправить ключ", show_alert=True)
+        await callback.message.answer(
+            f"❌ Не удалось отправить ключ студенту.\n"
+            f"Возможно, студент заблокировал бота или не начал диалог.\n\n"
+            f"Отправьте код вручную: <code>{auth_code}</code>",
+            parse_mode="HTML"
+        )
+
+
+@router.callback_query(F.data == "back_to_web_auth")
+async def back_to_web_auth(callback: CallbackQuery, state: FSMContext):
+    """Вернуться к списку студентов для генерации ключей"""
+    await start_web_auth_key_generation(callback.message, state)
     await callback.answer()

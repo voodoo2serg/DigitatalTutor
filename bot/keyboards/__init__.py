@@ -39,6 +39,7 @@ def get_admin_menu():
                 KeyboardButton(text="📤 Массовая рассылка"),
             ],
             [
+                KeyboardButton(text="🔑 Ключи веб-доступа"),
                 KeyboardButton(text="🔙 Студенческое меню"),
             ],
         ],

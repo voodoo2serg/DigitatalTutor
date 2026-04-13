@@ -52,7 +52,7 @@ async def start_communication(message: Message, state: FSMContext):
 
 @router.message(CommunicationStates.waiting_message)
 async def process_message(message: Message, state: FSMContext):
-    """Обработка сообщения для руководителя"""
+    """Обработка сообщения для руководителя или от админа к студенту"""
     if message.text == "❌ Отмена":
         await state.clear()
         await message.answer(
@@ -72,45 +72,103 @@ async def process_message(message: Message, state: FSMContext):
     
     data = await state.get_data()
     student_id = data.get("student_id")
+    is_admin_sending = data.get("is_admin_sending", False)
+    recipient_id = data.get("recipient_id")  # For admin->student
+    recipient_name = data.get("recipient_name")
     
     try:
-        from bot.models import AsyncSessionContext, Communication
+        from bot.models import AsyncSessionContext, Communication, User
         
         async with AsyncSessionContext() as session:
-            comm = Communication(
-                id=uuid4(),
-                from_user_id=student_id,
-                to_user_id=None,
-                channel="telegram",
-                message_type="text",
-                message=msg_text,
-                content=msg_text,
-                from_student=True,
-                from_teacher=False,
-                is_read=False,
-                created_at=datetime.utcnow()
-            )
-            session.add(comm)
-            await session.commit()
-        
-        # Уведомляем админов
-        try:
-            for admin_id in config.ADMIN_IDS:
-                await message.bot.send_message(
-                    chat_id=admin_id,
-                    text=f"📩 <b>Новое сообщение от студента</b>\n\n"
-                         f"👤 Студент: {message.from_user.full_name}\n"
-                         f"💬 Сообщение:\n{msg_text[:500]}",
+            if is_admin_sending and recipient_id:
+                # Admin sending message to student
+                # Get admin user ID
+                admin_result = await session.execute(
+                    select(User).where(User.telegram_id == message.from_user.id)
+                )
+                admin = admin_result.scalar_one_or_none()
+                admin_id = admin.id if admin else None
+                
+                # Get student ID from telegram_id
+                student_result = await session.execute(
+                    select(User).where(User.telegram_id == recipient_id)
+                )
+                student = student_result.scalar_one_or_none()
+                student_db_id = student.id if student else None
+                
+                comm = Communication(
+                    id=uuid4(),
+                    from_user_id=admin_id,
+                    to_user_id=student_db_id,
+                    channel="telegram",
+                    message_type="text",
+                    message=msg_text,
+                    content=msg_text,
+                    from_student=False,
+                    from_teacher=True,
+                    is_read=False,
+                    created_at=datetime.utcnow()
+                )
+                session.add(comm)
+                await session.commit()
+                
+                # Send message to student via bot
+                try:
+                    await message.bot.send_message(
+                        chat_id=recipient_id,
+                        text=f"💬 <b>Сообщение от руководителя</b>\n\n{msg_text}",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send message to student: {e}")
+                    await message.answer(
+                        f"❌ Не удалось отправить сообщение студенту. Возможно, он заблокировал бота.",
+                        reply_markup=get_admin_menu()
+                    )
+                    await state.clear()
+                    return
+                
+                await message.answer(
+                    f"✅ Сообщение отправлено {recipient_name}!",
+                    reply_markup=get_admin_menu()
+                )
+                
+            else:
+                # Student sending message to teacher (original behavior)
+                comm = Communication(
+                    id=uuid4(),
+                    from_user_id=student_id,
+                    to_user_id=None,
+                    channel="telegram",
+                    message_type="text",
+                    message=msg_text,
+                    content=msg_text,
+                    from_student=True,
+                    from_teacher=False,
+                    is_read=False,
+                    created_at=datetime.utcnow()
+                )
+                session.add(comm)
+                await session.commit()
+                
+                # Уведомляем админов
+                try:
+                    for admin_id in config.ADMIN_IDS:
+                        await message.bot.send_message(
+                            chat_id=admin_id,
+                            text=f"📩 <b>Новое сообщение от студента</b>\n\n"
+                                 f"👤 Студент: {message.from_user.full_name}\n"
+                                 f"💬 Сообщение:\n{msg_text[:500]}",
+                            parse_mode="HTML"
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to notify admin: {e}")
+                
+                await message.answer(
+                    Messages.COMMUNICATION_SENT,
+                    reply_markup=get_main_menu(),
                     parse_mode="HTML"
                 )
-        except Exception as e:
-            logger.error(f"Failed to notify admin: {e}")
-        
-        await message.answer(
-            Messages.COMMUNICATION_SENT,
-            reply_markup=get_main_menu(),
-            parse_mode="HTML"
-        )
         
         await state.clear()
         
