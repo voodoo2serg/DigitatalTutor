@@ -770,6 +770,13 @@ async def confirm_and_send(callback: CallbackQuery, state: FSMContext, bot: Bot)
         from bot.models import Communication
         from uuid import uuid4
         
+        # Получаем ID админа
+        admin_result = await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        admin = admin_result.scalar_one_or_none()
+        admin_id = admin.id if admin else None
+        
         for i, student_id in enumerate(selected_ids):
             result = await session.execute(
                 select(User).where(User.id == student_id)
@@ -829,10 +836,10 @@ async def confirm_and_send(callback: CallbackQuery, state: FSMContext, bot: Bot)
                 if send_to_chat:
                     comm = Communication(
                         id=uuid4(),
-                        from_user_id=None,
+                        from_user_id=admin_id if 'admin' in locals() else None,
                         to_user_id=student_id,
                         channel="telegram",
-                        message_type="text",
+                        message_type="mass",  # Отмечаем как массовое
                         message=personalized_text,
                         content=personalized_text,
                         from_student=False,
