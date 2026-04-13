@@ -209,7 +209,7 @@ async def generate_short_ai_review(callback: CallbackQuery):
     await callback.answer("🤖 Генерирую короткую рецензию...", show_alert=False)
     await callback.message.edit_text(
         "⏳ <b>Генерация короткой рецензии...</b>\n\n"
-        "Это займет 10-20 секунд...",
+        "Это займет до 60 секунд...",
         parse_mode="HTML"
     )
     
@@ -228,7 +228,7 @@ async def generate_detailed_ai_review(callback: CallbackQuery):
     await callback.answer("🤖 Генерирую подробную рецензию...", show_alert=False)
     await callback.message.edit_text(
         "⏳ <b>Генерация подробной рецензии...</b>\n\n"
-        "Это займет 20-40 секунд...",
+        "Это займет до 60 секунд...",
         parse_mode="HTML"
     )
     
@@ -321,7 +321,7 @@ async def _generate_and_send_review(callback: CallbackQuery, work_id_str: str, r
 {review_text}
 
 ---
-✅ Рецензия сохранена и отправлена студенту!"""
+✅ Рецензия сохранена в системе"""
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="◀️ К работе", callback_data=f"admin_work:{work_id_str}")]
