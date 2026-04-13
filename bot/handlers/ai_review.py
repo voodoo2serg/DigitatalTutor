@@ -178,7 +178,11 @@ async def start_ai_review(callback: CallbackQuery):
 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="✍️ Написать рецензию", callback_data=f"add_review:{work_id_str}"),
+                    InlineKeyboardButton(text="📝 Короткая рецензия", callback_data=f"ai_short_review:{work_id_str}"),
+                    InlineKeyboardButton(text="📄 Подробная рецензия", callback_data=f"ai_detailed_review:{work_id_str}")
+                ],
+                [
+                    InlineKeyboardButton(text="✍️ Своя рецензия", callback_data=f"add_review:{work_id_str}"),
                     InlineKeyboardButton(text="⭐ Оценить", callback_data=f"grade_work:{work_id_str}")
                 ],
                 [InlineKeyboardButton(text="◀️ Назад", callback_data=f"admin_work:{work_id_str}")]
@@ -191,5 +195,161 @@ async def start_ai_review(callback: CallbackQuery):
         await callback.message.edit_text(
             f"❌ Ошибка AI-анализа: {str(e)[:200]}\n\n"
             "Проверьте настройки AI-провайдеров в разделе ⚙️ Настройки",
+            parse_mode="HTML"
+        )
+
+@router.callback_query(F.data.startswith("ai_short_review:"))
+async def generate_short_ai_review(callback: CallbackQuery):
+    """Сгенерировать короткую AI-рецензию"""
+    work_id_str = callback.data.split(":")[1]
+    
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("⛔ У вас нет доступа.", show_alert=True)
+        return
+    
+    await callback.answer("🤖 Генерирую короткую рецензию...", show_alert=False)
+    await callback.message.edit_text(
+        "⏳ <b>Генерация короткой рецензии...</b>\n\n"
+        "Это займет 10-20 секунд...",
+        parse_mode="HTML"
+    )
+    
+    await _generate_and_send_review(callback, work_id_str, "short")
+
+
+@router.callback_query(F.data.startswith("ai_detailed_review:"))
+async def generate_detailed_ai_review(callback: CallbackQuery):
+    """Сгенерировать подробную AI-рецензию"""
+    work_id_str = callback.data.split(":")[1]
+    
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("⛔ У вас нет доступа.", show_alert=True)
+        return
+    
+    await callback.answer("🤖 Генерирую подробную рецензию...", show_alert=False)
+    await callback.message.edit_text(
+        "⏳ <b>Генерация подробной рецензии...</b>\n\n"
+        "Это займет 20-40 секунд...",
+        parse_mode="HTML"
+    )
+    
+    await _generate_and_send_review(callback, work_id_str, "detailed")
+
+
+async def _generate_and_send_review(callback: CallbackQuery, work_id_str: str, review_type: str):
+    """Generate and send AI review"""
+    try:
+        from bot.models import AsyncSessionContext, StudentWork, User, File
+        import os
+        
+        async with AsyncSessionContext() as session:
+            work_id = uuid.UUID(work_id_str)
+            result = await session.execute(
+                select(StudentWork).where(StudentWork.id == work_id)
+            )
+            work = result.scalar_one_or_none()
+            
+            if not work:
+                await callback.message.edit_text("❌ Работа не найдена", parse_mode="HTML")
+                return
+            
+            # Get student name
+            student_result = await session.execute(select(User).where(User.id == work.student_id))
+            student = student_result.scalar_one_or_none()
+            student_name = student.full_name if student else "Студент"
+            
+            # Get file content
+            file_result = await session.execute(
+                select(File).where(File.work_id == work_id)
+            )
+            files = file_result.scalars().all()
+            
+            text_content = ""
+            for f in files:
+                if f.storage_path and os.path.exists(f.storage_path):
+                    try:
+                        with open(f.storage_path, 'r', encoding='utf-8', errors='ignore') as file:
+                            text_content += file.read() + "\n"
+                    except Exception as e:
+                        logger.error(f"Failed to read file {f.filename}: {e}")
+                elif f.ai_extracted_text:
+                    text_content += f.ai_extracted_text + "\n"
+            
+            if not text_content.strip():
+                await callback.message.edit_text(
+                    "❌ Не удалось извлечь текст из файлов",
+                    parse_mode="HTML"
+                )
+                return
+            
+            # Get analysis data
+            analysis_data = work.ai_analysis_json or {
+                "antiplagiarism": {"score": work.ai_plagiarism_score or 0},
+                "structure": {"score": work.ai_structure_score or 0},
+                "formatting": {"score": work.ai_formatting_score or 0}
+            }
+            
+            # Generate review
+            if review_type == "short":
+                review_text = await ai_service.generate_short_review(
+                    text_content, work.title, student_name, analysis_data, "cerebras"
+                )
+                title = "📝 <b>Короткая AI-рецензия</b>"
+            else:
+                review_text = await ai_service.generate_detailed_review(
+                    text_content, work.title, student_name, analysis_data, "cerebras"
+                )
+                title = "📄 <b>Подробная AI-рецензия</b>"
+            
+            # Save review to DB
+            from datetime import datetime
+            await session.execute(
+                update(StudentWork)
+                .where(StudentWork.id == work_id)
+                .values(
+                    teacher_comment=review_text,
+                    teacher_reviewed_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+            )
+            
+            # Send review to admin
+            review_message = f"""{title}
+
+👤 <b>Студент:</b> {student_name}
+📝 <b>Работа:</b> {work.title}
+
+{review_text}
+
+---
+✅ Рецензия сохранена и отправлена студенту!"""
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ К работе", callback_data=f"admin_work:{work_id_str}")]
+            ])
+            
+            await callback.message.edit_text(review_message, reply_markup=keyboard, parse_mode="HTML")
+            
+            # Notify student
+            if student and student.telegram_id:
+                try:
+                    await callback.bot.send_message(
+                        chat_id=student.telegram_id,
+                        text=(
+                            f"✍️ <b>Новая рецензия на вашу работу</b>\n\n"
+                            f"📝 {work.title}\n\n"
+                            f"{review_text[:500]}"
+                            f"{'...' if len(review_text) > 500 else ''}\n\n"
+                            f"Подробности в разделе «📋 Мои работы»"
+                        ),
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify student: {e}")
+    
+    except Exception as e:
+        logger.error(f"AI review generation failed: {e}", exc_info=True)
+        await callback.message.edit_text(
+            f"❌ Ошибка генерации рецензии: {str(e)[:200]}",
             parse_mode="HTML"
         )

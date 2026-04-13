@@ -299,28 +299,54 @@ class AIService:
                 "recommendations": [],
             }
 
-    async def generate_review(self, text: str, work_title: str, student_name: str, analysis_data: Dict, preferred_provider: Optional[str] = None) -> str:
-        """Generate a comprehensive review for a student's work"""
+    async def generate_short_review(self, text: str, work_title: str, student_name: str, analysis_data: Dict, preferred_provider: Optional[str] = None) -> str:
+        """Generate a SHORT review for a student's work (brief summary)"""
 
         prompt = (
-            f"Ты — преподаватель, который проверяет научную работу студента {student_name}.\n"
-            f'Напиши подробную рецензию на работу "{work_title}".\n\n'
-            f"Результаты автоматического анализа:\n"
+            f"Ты — преподаватель, проверяющий научную работу студента {student_name}.\n"
+            f'Напиши КОРОТКУЮ рецензию на работу "{work_title}" (максимум 150 слов).\n\n'
+            f"Результаты анализа:\n"
             f"- Оригинальность: {analysis_data.get('antiplagiarism', {}).get('score', 'N/A')}%\n"
             f"- Структура: {analysis_data.get('structure', {}).get('score', 'N/A')}/100\n"
             f"- Оформление: {analysis_data.get('formatting', {}).get('score', 'N/A')}/100\n\n"
-            "Напиши рецензию:\n"
-            "1. Общая оценка (1-2 предложения)\n"
-            "2. Сильные стороны (2-3 предложения)\n"
-            "3. Слабые стороны (2-3 предложения)\n"
-            "4. Рекомендации (3-4 пункта)\n"
-            "5. Заключение\n\n"
-            "Тон: конструктивный, уважительный, мотивирующий."
+            "Структура рецензии:\n"
+            "1. Общая оценка (2-3 предложения)\n"
+            "2. Главные замечания (2-3 пункта)\n"
+            "3. Краткое заключение\n\n"
+            "Тон: конструктивный, уважительный. БЕЗ воды, только суть!"
         )
 
-        full_prompt = f"{prompt}\n\nТекст работы (фрагмент):\n---\n{text[:6000]}\n---"
+        full_prompt = f"{prompt}\n\nТекст работы (фрагмент):\n---\n{text[:4000]}\n---"
 
-        # Try to generate using any available provider
+        return await self._generate_review_text(full_prompt, preferred_provider)
+
+    async def generate_detailed_review(self, text: str, work_title: str, student_name: str, analysis_data: Dict, preferred_provider: Optional[str] = None) -> str:
+        """Generate a DETAILED review for a student's work (comprehensive analysis)"""
+
+        prompt = (
+            f"Ты — преподаватель, проверяющий научную работу студента {student_name}.\n"
+            f'Напиши ПОДРОБНУЮ развернутую рецензию на работу "{work_title}".\n\n'
+            f"Результаты анализа:\n"
+            f"- Оригинальность: {analysis_data.get('antiplagiarism', {}).get('score', 'N/A')}%\n"
+            f"- Структура: {analysis_data.get('structure', {}).get('score', 'N/A')}/100\n"
+            f"- Оформление: {analysis_data.get('formatting', {}).get('score', 'N/A')}/100\n\n"
+            "Структура рецензии:\n"
+            "1. Общая оценка работы (3-4 предложения)\n"
+            "2. Сильные стороны (подробно, с примерами)\n"
+            "3. Слабые стороны и недочеты (подробно, с примерами)\n"
+            "4. Рекомендации по улучшению (4-5 пунктов с пояснениями)\n"
+            "5. Заключение с оценкой потенциала работы\n\n"
+            "Тон: конструктивный, уважительный, мотивирующий, профессорский."
+        )
+
+        full_prompt = f"{prompt}\n\nТекст работы (фрагмент):\n---\n{text[:8000]}\n---"
+
+        return await self._generate_review_text(full_prompt, preferred_provider)
+
+    async def _generate_review_text(self, full_prompt: str, preferred_provider: Optional[str] = None) -> str:
+        """Internal method to generate review text using available providers"""
+        
+        # Try preferred provider first
         if preferred_provider and preferred_provider in self.providers:
             config = self.providers[preferred_provider]
             if config.get("is_active") and config.get("api_key"):
@@ -328,6 +354,7 @@ class AIService:
                 if result:
                     return result
 
+        # Fallback through providers
         for name in ["cerebras", "openrouter", "ollama", "huggingface"]:
             if name in self.providers:
                 config = self.providers[name]
